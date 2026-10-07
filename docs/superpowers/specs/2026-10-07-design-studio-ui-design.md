@@ -21,9 +21,10 @@ lets the chrome take its colours from the active brand kit (D2).
 
 ## Goals and non-goals
 
-Goals: every page restyled on the system; light only; one glass bar; two-tone page titles;
-white surfaces; ink buttons; colour only for outcomes; Inter from the kit; every screen right at
-1440 and 390; a "How it works" page that introduces the eight agents; new README screenshots.
+Goals: every page restyled on the system; light by default, dark by choice (D1); one glass
+bar; two-tone page titles; white surfaces; ink buttons; colour only for outcomes; Inter from the
+kit; every screen right at 1440 and 390; a "How it works" page that introduces the eight agents;
+new README screenshots.
 
 Non-goals: no change to what any page does, saves or shows; no change to the post renderer,
 the layouts or the editor's features; no new tests (the suite's 99 must stay green); no docked
@@ -31,8 +32,13 @@ titles, no sliding pill, no sheets (the studio has no dialogs); no Tailwind.
 
 ## Decisions
 
-- **D1. Light only.** The theme toggle, the theme script in the base template and the dark
-  token sets are removed. The system has no dark theme and says not to invent one.
+- **D1. Light by default, dark by choice.** The system's light look is the default. A dark
+  token set derived from the kit is kept at Sahaj's request (2026-10-07), although the system
+  has no dark theme of its own: the heading is the kit's heading colour lightened, so another
+  kit keeps its hue; the status colours stay, and their text tints lighten to read on dark
+  surfaces. A round toggle at the right end of the bar chooses the theme and remembers the
+  choice; with nothing chosen, the system setting decides. (Amended 2026-10-07; D1 first read
+  "Light only", and the restyle removed the toggle, the theme script and the dark sets.)
 - **D2. The chrome's tokens come from the active kit.** `brand.yaml` already names the roles
   the system uses: `heading_blue`, `ink`, `ink_soft`, `ink_faint`, `line`, `wash`, `porcelain`,
   `white`. The base template writes them as CSS variables on `:root`; a kit that lacks a role
@@ -194,7 +200,7 @@ DESIGN.md.
 | `.empty` | empty state: what the space means and the next step |
 | `.banner` | neutral inset line under the bar |
 | `.top-bar`, `.top-nav`, `.wordmark` | the glass bar and the tab bar |
-| `.theme-toggle` | removed |
+| `.theme-toggle` | a round 36px ghost button at the right end of the bar (D1) |
 
 The `ref-card` class name stays on reference cards, because a test counts it.
 
@@ -220,7 +226,7 @@ and no page adds a second layer of padding.
 - Files: `studio/web/static/app.css` rewritten section by section, keeping the editor's
   functional CSS (handles, colour circles, drag states); `studio/web/templates/base.html` for
   the shell, the token block and the font face; every template for the class changes;
-  `studio/web/static/app.js` loses the theme code and gains nothing it does not need;
+  `studio/web/static/app.js` keeps its theme code (D1) and gains nothing it does not need;
   `studio/web/routes.py` gains the `/about` route and a `chrome_tokens(kit)` helper for the
   base template; new `templates/about.html` and `templates/icons.html`.
 - The renderer, its layouts and `base.css` are untouched; posts look exactly as before.
@@ -238,7 +244,7 @@ and no page adds a second layer of padding.
 - No blue button and no blue link anywhere; every heading in heading blue; body text ink.
 - One primary button per view.
 - No badge on a neutral row; colour only on finished, failed, interrupted and running.
-- No dark theme, no toggle, no theme script.
+- The toggle and the system setting both work; every page right in both.
 - Inter is served from the kit through `/brand/font`; no request leaves the machine for a
   font.
 - Glass only on the bar and the tab bar.

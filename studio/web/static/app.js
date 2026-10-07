@@ -1,9 +1,9 @@
 // Design Studio: small, page-specific behaviour. No build step, no framework.
 // Every page works from its server-rendered HTML alone; this file only adds
-// the live-updating touches (the bar condensing as the page scrolls, the
-// library's choices and progress line, the Studio form's auto limits and
-// "Research first", the run and session pages' polling, the session page's
-// directions, the post page's copy button).
+// the live-updating touches (the theme toggle, the bar condensing as the page
+// scrolls, the library's choices and progress line, the Studio form's auto
+// limits and "Research first", the run and session pages' polling, the session
+// page's directions, the post page's copy button).
 (() => {
   "use strict";
 
@@ -74,6 +74,48 @@
       text = text ? `${text}, ${extra}` : extra;
     }
     return text;
+  }
+
+  // -------------------------------------------------------------------- theme
+
+  // The theme the page shows: the one chosen with the toggle, or else the system's.
+  function currentTheme() {
+    const attr = document.documentElement.getAttribute("data-theme");
+    if (attr === "dark" || attr === "light") return attr;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+
+  // The button's words offer the other theme; its icon is the moon in light, the sun in dark.
+  function updateThemeToggle(button, theme) {
+    const label = theme === "dark" ? "Switch to light" : "Switch to dark";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.querySelectorAll("[data-theme-icon]").forEach((icon) => {
+      icon.hidden = icon.dataset.themeIcon !== theme;
+    });
+  }
+
+  function initTheme() {
+    const button = document.querySelector("[data-theme-toggle]");
+    if (!button) return;
+    updateThemeToggle(button, currentTheme());
+
+    button.addEventListener("click", () => {
+      const next = currentTheme() === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      try {
+        localStorage.setItem("theme", next);
+      } catch {
+        /* the choice just won't survive a reload */
+      }
+      updateThemeToggle(button, next);
+    });
+
+    // With nothing chosen the page follows the system setting as it changes; so does the button.
+    const system = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+    if (system && system.addEventListener) {
+      system.addEventListener("change", () => updateThemeToggle(button, currentTheme()));
+    }
   }
 
   // ---------------------------------------------------------------------- bar
@@ -615,6 +657,7 @@
     });
   }
 
+  initTheme();
   initBar();
   initStudioPage();
   initLibrary();

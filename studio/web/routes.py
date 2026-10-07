@@ -293,9 +293,14 @@ _CHROME_TOKENS: tuple[tuple[str, str, str], ...] = (
 
 def chrome_tokens(kit: BrandKit) -> dict[str, str]:
     """The chrome's CSS variables from the kit's colours, with the system's value for any
-    colour the kit does not name. The base template writes them on :root."""
+    colour the kit does not name. The base template writes them on :root.
+
+    One more key, --kit-heading, repeats --heading's value: the dark theme lightens the kit's
+    heading colour from it, so the light --heading stays the kit's own."""
     palette = {colour.name: colour.hex for colour in kit.colours}
-    return {variable: palette.get(name, default) for name, variable, default in _CHROME_TOKENS}
+    tokens = {variable: palette.get(name, default) for name, variable, default in _CHROME_TOKENS}
+    tokens["--kit-heading"] = tokens["--heading"]
+    return tokens
 
 
 def _base_context(request: Request) -> dict[str, Any]:

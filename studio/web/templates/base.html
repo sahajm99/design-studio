@@ -5,6 +5,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>{% block title %}Design Studio{% endblock %}</title>
+    <script>
+      // Set the saved theme before anything paints, so there is no flash of the
+      // wrong theme. With nothing saved, the CSS alone follows the system setting.
+      (function () {
+        try {
+          var saved = localStorage.getItem("theme");
+          if (saved === "dark" || saved === "light") {
+            document.documentElement.setAttribute("data-theme", saved);
+          }
+        } catch (error) {
+          /* localStorage can be unavailable; the system setting still applies. */
+        }
+      })();
+    </script>
     {#- The chrome takes its colours and its face from the active kit, before the stylesheet,
         which only holds the system's defaults and the status colours. The face is the kit's
         own file, served by /brand/font, so no request leaves the machine for a font. #}
@@ -51,8 +65,11 @@
     <header class="bar-slot">
       <div class="bar" data-bar>
         <div class="glass bar-glass" aria-hidden="true"></div>
+        {#- The kit's lockup for a light background, and for a dark one; the stylesheet shows
+            the one that suits the theme. #}
         <a class="bar-brand" href="/studio">
-          <img class="bar-logo" src="/brand/logo?mode=light" alt="" />
+          <img class="bar-logo bar-logo-light" src="/brand/logo?mode=light" alt="" />
+          <img class="bar-logo bar-logo-dark" src="/brand/logo?mode=dark" alt="" />
           <span class="bar-rule" aria-hidden="true"></span>
           <span class="bar-name">{{ brand_name }} Design Studio</span>
         </a>
@@ -62,6 +79,12 @@
           <a class="bar-item{{ ' glass-pill' if key == active_page else '' }}" href="{{ href }}"{% if key == active_page %} aria-current="page"{% endif %}>{{ icons.icon(key, 18) }}<span>{{ label }}</span></a>
           {%- endfor %}
         </nav>
+        {#- The theme toggle: a moon in light, a sun in dark. app.js swaps the two and keeps
+            the words right for the theme the page shows. #}
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to dark" title="Switch to dark">
+          <span class="theme-icon" data-theme-icon="light">{{ icons.icon("moon", 18) }}</span>
+          <span class="theme-icon" data-theme-icon="dark" hidden>{{ icons.icon("sun", 18) }}</span>
+        </button>
       </div>
     </header>
     <main class="page">

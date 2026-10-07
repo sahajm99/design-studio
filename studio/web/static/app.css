@@ -2,16 +2,20 @@
 
    Calm and quiet: ink on white surfaces over a porcelain canvas, the kit's face, titles in
    the kit's heading blue, glass for the navigation layer only, colour only for outcomes.
-   Light only. The posts the studio makes are styled by the renderer, never by this file.
+   Light by default, dark by choice: a dark set derived from the kit, chosen with the bar's
+   toggle or by the system setting. The posts the studio makes are styled by the renderer,
+   never by this file.
 
    Sections: tokens, base, shell, components, pages, then the editor's functional rules. */
 
 /* ------------------------------------------------------------------------ tokens */
 
 /* The chrome's colours and face, as the Hybridge kit gives them. base.html writes the
-   active kit's values on :root, which outranks html, so another kit tints the tool. */
+   active kit's values on :root, which outranks html, so another kit tints the tool.
+   --kit-heading keeps the kit's heading colour for the dark set to lighten. */
 html {
   --heading: #0f4b7b;
+  --kit-heading: #0f4b7b;
   --ink: #18181b;
   --ink-soft: #52525b;
   --ink-faint: #a1a1aa;
@@ -45,6 +49,9 @@ html {
   --wash-60: color-mix(in srgb, var(--ink-wash) 60%, transparent);
   --wash-40: color-mix(in srgb, var(--ink-wash) 40%, transparent);
 
+  /* Words on an ink fill: a primary button, a pressed choice, the chosen filter. */
+  --on-ink: var(--white);
+
   --font-sans: var(--font-kit), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --ease-glass: cubic-bezier(0.32, 0.72, 0, 1);
   --shadow-soft: 0 1px 2px rgba(24, 24, 27, 0.04);
@@ -54,8 +61,92 @@ html {
   --shadow-pill: 0 0 0 0.5px rgba(24, 24, 27, 0.06), 0 1px 2px rgba(24, 24, 27, 0.06),
     0 6px 16px -8px rgba(24, 24, 27, 0.22), inset 0 1px 0 rgba(255, 255, 255, 1);
 
+  /* The canvas's three washes of light, and the glass: its layer, the same layer where blur
+     is missing, its border, its ring, its bright inner top edge, a hover on it, and the pill
+     that lifts the current item (on the glass and on a segmented track). */
+  --canvas-wash-1: rgba(205, 220, 255, 0.55);
+  --canvas-wash-2: rgba(230, 222, 255, 0.5);
+  --canvas-wash-3: rgba(208, 238, 243, 0.5);
+  --glass-fill: rgba(255, 255, 255, 0.6);
+  --glass-fill-solid: rgba(255, 255, 255, 0.94);
+  --glass-edge: rgba(255, 255, 255, 0.7);
+  --glass-ring: rgba(24, 24, 27, 0.07);
+  --glass-sheen: rgba(255, 255, 255, 0.9);
+  --glass-hover: rgba(255, 255, 255, 0.45);
+  --pill-fill: rgba(255, 255, 255, 0.92);
+
+  /* A select's chevron, in ink-soft. */
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%2352525b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+
   /* The frame: the page is this wide at most, and the bar lines up with its content. */
   --page-max: 75rem;
+}
+
+/* The dark set: chosen with the toggle (data-theme), or the system setting when nothing is
+   chosen. Both selectors outrank the kit's :root block, which keeps writing the light
+   values; the heading is the kit's own colour lightened, so another kit keeps its hue. The
+   status colours stay; the text tints lighten so they read on a dark surface. The two blocks
+   must stay the same. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #121316;
+  --white: #1b1d21;
+  --ink: #f4f4f5;
+  --ink-soft: #b4b4bb;
+  --ink-faint: #7a7a83;
+  --ink-line: #2a2d33;
+  --ink-wash: #24272c;
+  --heading: color-mix(in srgb, var(--kit-heading) 50%, white);
+  --text-success: #5bd38a;
+  --text-warning: #e6c25a;
+  --text-danger: #f0787c;
+  --text-info: #8fb4f5;
+  --on-ink: var(--canvas);
+  --shadow-pill: 0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.3),
+    0 6px 16px -8px rgba(0, 0, 0, 0.5);
+  --canvas-wash-1: color-mix(in srgb, var(--heading) 9%, transparent);
+  --canvas-wash-2: color-mix(in srgb, var(--heading) 6%, transparent);
+  --canvas-wash-3: color-mix(in srgb, var(--heading) 6%, transparent);
+  --glass-fill: rgba(24, 24, 27, 0.62);
+  --glass-fill-solid: rgba(24, 24, 27, 0.94);
+  --glass-edge: rgba(255, 255, 255, 0.08);
+  --glass-ring: rgba(255, 255, 255, 0.06);
+  --glass-sheen: transparent;
+  --glass-hover: rgba(255, 255, 255, 0.06);
+  --pill-fill: rgba(52, 55, 62, 0.92);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23b4b4bb' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --canvas: #121316;
+    --white: #1b1d21;
+    --ink: #f4f4f5;
+    --ink-soft: #b4b4bb;
+    --ink-faint: #7a7a83;
+    --ink-line: #2a2d33;
+    --ink-wash: #24272c;
+    --heading: color-mix(in srgb, var(--kit-heading) 50%, white);
+    --text-success: #5bd38a;
+    --text-warning: #e6c25a;
+    --text-danger: #f0787c;
+    --text-info: #8fb4f5;
+    --on-ink: var(--canvas);
+    --shadow-pill: 0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.3),
+      0 6px 16px -8px rgba(0, 0, 0, 0.5);
+    --canvas-wash-1: color-mix(in srgb, var(--heading) 9%, transparent);
+    --canvas-wash-2: color-mix(in srgb, var(--heading) 6%, transparent);
+    --canvas-wash-3: color-mix(in srgb, var(--heading) 6%, transparent);
+    --glass-fill: rgba(24, 24, 27, 0.62);
+    --glass-fill-solid: rgba(24, 24, 27, 0.94);
+    --glass-edge: rgba(255, 255, 255, 0.08);
+    --glass-ring: rgba(255, 255, 255, 0.06);
+    --glass-sheen: transparent;
+    --glass-hover: rgba(255, 255, 255, 0.06);
+    --pill-fill: rgba(52, 55, 62, 0.92);
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23b4b4bb' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+  }
 }
 
 /* -------------------------------------------------------------------------- base */
@@ -158,8 +249,8 @@ time {
 
 /* ------------------------------------------------------------------------- shell */
 
-/* The canvas the glass floats over: the porcelain with three faint washes of light, on
-   its own fixed layer so scrolling never repaints it. */
+/* The canvas the glass floats over: the porcelain with three faint washes of light (of the
+   heading's tint in dark), on its own fixed layer so scrolling never repaints it. */
 .app-canvas {
   background-color: var(--canvas);
   isolation: isolate;
@@ -172,40 +263,40 @@ time {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(64rem 38rem at 6% -12%, rgba(205, 220, 255, 0.55), transparent 62%),
-    radial-gradient(52rem 34rem at 102% -4%, rgba(230, 222, 255, 0.5), transparent 64%),
-    radial-gradient(60rem 40rem at 42% 112%, rgba(208, 238, 243, 0.5), transparent 62%);
+    radial-gradient(64rem 38rem at 6% -12%, var(--canvas-wash-1), transparent 62%),
+    radial-gradient(52rem 34rem at 102% -4%, var(--canvas-wash-2), transparent 64%),
+    radial-gradient(60rem 40rem at 42% 112%, var(--canvas-wash-3), transparent 62%);
 }
 
 /* Glass, for the navigation layer only: the bar and the tab bar. */
 .glass {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--glass-fill);
   -webkit-backdrop-filter: blur(22px) saturate(1.8);
   backdrop-filter: blur(22px) saturate(1.8);
-  border: 1px solid rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--glass-edge);
   box-shadow:
-    0 0 0 0.5px rgba(24, 24, 27, 0.07),
+    0 0 0 0.5px var(--glass-ring),
     0 14px 34px -18px rgba(24, 24, 27, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    inset 0 1px 0 var(--glass-sheen);
 }
 
 /* The lens on the current item: brighter than the glass, and lifted off it. */
 .glass-pill {
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--pill-fill);
   box-shadow: var(--shadow-pill);
 }
 
-/* No blur available: more white, so text over it still reads. */
+/* No blur available: a denser layer, so text over it still reads. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass {
-    background: rgba(255, 255, 255, 0.94);
+    background: var(--glass-fill-solid);
   }
 }
 
 /* The system's "reduce transparency" makes the glass solid. */
 @media (prefers-reduced-transparency: reduce) {
   .glass {
-    background: #fff;
+    background: var(--white);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
@@ -272,6 +363,29 @@ time {
   height: 32px;
 }
 
+/* One lockup per theme: the kit's own on light, its dark-background version on dark. */
+.bar-logo-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .bar-logo-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .bar-logo-dark {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .bar-logo-light {
+    display: none;
+  }
+
+  :root:not([data-theme="light"]) .bar-logo-dark {
+    display: block;
+  }
+}
+
 .bar-rule {
   flex: none;
   width: 1px;
@@ -319,7 +433,7 @@ time {
 }
 
 .bar-item:not([aria-current]):hover {
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--glass-hover);
   color: var(--ink);
 }
 
@@ -340,6 +454,28 @@ time {
   .bar-item {
     padding: 0 12px;
   }
+}
+
+/* The theme toggle: a round ghost button at the bar's right end, after the items. */
+.theme-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: color 150ms var(--ease-glass), background-color 150ms var(--ease-glass);
+}
+
+.theme-toggle:hover {
+  background: var(--glass-hover);
+  color: var(--ink);
 }
 
 /* The phone's tab bar: glass floating 12px above the bottom, clear of the safe area. */
@@ -404,6 +540,11 @@ time {
     display: inline;
   }
 
+  /* The toggle stays in the bar, at its right end beside the page's name. */
+  .theme-toggle {
+    margin-left: auto;
+  }
+
   .bar-name {
     position: absolute;
     width: 1px;
@@ -463,7 +604,7 @@ time {
   padding: 9px 14px;
   border: 1px solid var(--line-80);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.6);
+  background: color-mix(in srgb, var(--white) 60%, transparent);
   color: var(--ink-soft);
   font-size: 13px;
   line-height: 1.45;
@@ -662,7 +803,7 @@ time {
 .btn-primary {
   border-color: transparent;
   background: var(--ink);
-  color: var(--white);
+  color: var(--on-ink);
 }
 
 .btn-primary:hover {
@@ -738,7 +879,7 @@ time {
 
 .choice-btn[aria-pressed="true"] {
   background: var(--ink);
-  color: var(--white);
+  color: var(--on-ink);
 }
 
 @media (pointer: coarse) {
@@ -797,7 +938,7 @@ textarea {
 select {
   padding-right: 36px;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%2352525b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+  background-image: var(--chevron);
   background-position: right 12px center;
   background-repeat: no-repeat;
   background-size: 16px;
@@ -983,7 +1124,7 @@ input[type="file"]::file-selector-button:hover {
 }
 
 .pill-option input:checked + span {
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--pill-fill);
   box-shadow: var(--shadow-pill);
   color: var(--ink);
 }
@@ -1038,7 +1179,7 @@ input[type="file"]::file-selector-button:hover {
 .filter-btn.is-active {
   border-color: var(--ink);
   background: var(--ink);
-  color: var(--white);
+  color: var(--on-ink);
 }
 
 /* Badges: small soft pills. Neutral by default; warning where it is an outcome. */
@@ -1180,7 +1321,7 @@ a.badge:hover {
 
 .is-faded {
   border-color: var(--line-70);
-  background: rgba(255, 255, 255, 0.55);
+  background: color-mix(in srgb, var(--white) 55%, transparent);
   box-shadow: none;
   color: var(--ink-faint);
 }
@@ -2598,7 +2739,7 @@ details.panel[open] > summary {
   margin: 0;
   padding: 6px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.92);
+  background: color-mix(in srgb, var(--white) 92%, transparent);
   box-shadow: var(--shadow-soft);
   cursor: pointer;
 }
