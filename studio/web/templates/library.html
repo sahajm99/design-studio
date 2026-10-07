@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Library · Design Studio{% endblock %}
+{% block content %}
+<section class="panel quality-bar-panel">
+  {#- The page's heading comes first; the quality bar is the first part of the page. #}
+  <h1>Reference library</h1>
+  <h2>Quality bar</h2>
+  {% if quality_bar_error %}
+  <p class="field-error" role="alert">{{ quality_bar_error }}</p>
+  {% endif %}
+  <div class="quality-bar-row">
+    {% if quality_bar.url %}
+    <img class="quality-bar-image" src="{{ quality_bar.url }}" alt="Quality bar" />
+    {% endif %}
+    <div class="quality-bar-body">
+      {% if quality_bar.url %}
+      <p class="quality-bar-explain">This image is the bar the critic holds every photo to.</p>
+      <p class="hint">It sets the finish the critic expects, not the subject or the style. Choose a post you would publish as this brand.</p>
+      <p class="quality-bar-origin">{{ quality_bar.line }}</p>
+      {% endif %}
+      <form method="post" action="/quality-bar/upload" enctype="multipart/form-data" class="upload-form">
+        <label for="quality-bar-image">Upload an image</label>
+        <div class="upload-row">
+          <input type="file" id="quality-bar-image" name="image" accept="image/png,image/jpeg" required />
+          <button type="submit" class="btn">Upload</button>
+        </div>
+        <p class="hint">A PNG or a JPEG, up to 15 MB.</p>
+      </form>
+      {% if quality_bar.is_designer %}
+      <form method="post" action="/quality-bar/reset" class="inline-form">
+        <button type="submit" class="btn">Back to the kit's example</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <p class="lede">Import some designs, then mark each one liked or not. The taste panel below updates as you go.</p>
+
+  <div class="import-actions">
+    {% if has_board %}
+    <form method="post" action="/library/import" class="inline-form">
+      <input type="hidden" name="source" value="board" />
+      <button type="submit" class="btn">Import the brand's inspiration board</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/library/import" class="inline-form">
+      <input type="hidden" name="source" value="inbox" />
+      <button type="submit" class="btn">Import images from the inbox folder</button>
+    </form>
+  </div>
+  <p class="hint">Drop image files into the inbox folder on your machine (<code>data/inbox</code>), then use the button above.</p>
+
+  <div class="library-add">
+    <form method="post" action="/library/upload" enctype="multipart/form-data" class="upload-form">
+      <label for="library-images">Upload images</label>
+      <div class="upload-row">
+        <input type="file" id="library-images" name="images" accept="image/png,image/jpeg" multiple required />
+        <button type="submit" class="btn">Upload</button>
+      </div>
+      <p class="hint">A PNG or a JPEG, up to 15 MB.</p>
+    </form>
+    <form method="post" action="/library/import-links" class="links-form">
+      <label for="library-links">Paste image links</label>
+      <textarea id="library-links" name="links" rows="3" required></textarea>
+      <p class="hint">One link per line, up to 20.</p>
+      <button type="submit" class="btn">Import the links</button>
+    </form>
+  </div>
+  <p class="hint library-note">Only add images you are allowed to use. A reference shapes the prompt; it is never copied into a post.</p>
+
+  {% if import_summary %}
+  <div class="import-summary" role="status">
+    <p>
+      Added {{ import_summary.added }}, already in the library {{ import_summary.already_in_library }},
+      duplicates {{ import_summary.duplicates }}, could not be fetched {{ import_summary.unavailable|length }}.
+    </p>
+    {% if refused_text %}
+    <p>{{ refused_text }}</p>
+    {% endif %}
+    {% if import_summary.unavailable %}
+    <details>
+      <summary>
+        {% if import_summary.unavailable|length == 1 %}Why 1 item was skipped{% else %}Why {{ import_summary.unavailable|length }} items were skipped{% endif %}
+      </summary>
+      <ul>
+        {% for item in import_summary.unavailable %}
+        <li><strong>{{ item.label or "Untitled" }}</strong>: {{ item.reason }}</li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel taste-panel" data-taste-panel>
+  <h2>Taste</h2>
+  <p class="taste-summary" data-taste-summary>{{ taste.summary }}</p>
+  <p class="taste-counts">
+    <span data-taste-liked>{{ taste.liked_count }}</span> liked,
+    <span data-taste-disliked>{{ taste.disliked_count }}</span> disliked
+  </p>
+  <p class="analysis-progress" data-analysis-progress data-running="{{ 'true' if progress.running else 'false' }}">
+    Analysed <span data-analysed>{{ progress.analysed }}</span> of <span data-total>{{ progress.total }}</span>
+  </p>
+</section>
+
+<section class="panel">
+  <div class="filter-bar" role="group" aria-label="Filter references" data-filter-bar>
+    <button type="button" class="filter-btn is-active" data-filter="all">All</button>
+    <button type="button" class="filter-btn" data-filter="liked">Liked</button>
+    <button type="button" class="filter-btn" data-filter="disliked">Disliked</button>
+    <button type="button" class="filter-btn" data-filter="none">Not rated</button>
+  </div>
+
+  {% if references %}
+  <div class="ref-grid" data-ref-grid>
+    {% for reference in references %}
+    <article class="ref-card" data-ref-id="{{ reference.id }}" data-choice="{{ reference.choice }}">
+      <div class="ref-image">
+        {% if reference.image_path %}
+        <img src="/media/{{ reference.image_path }}" alt="{{ reference.label or 'Reference image' }}" loading="lazy" />
+        {% else %}
+        <div class="ref-image-missing">No image</div>
+        {% endif %}
+      </div>
+      <div class="ref-meta">
+        <p class="ref-label">{{ reference.label or "Untitled" }}</p>
+        {% if reference.category %}<p class="ref-category">{{ reference.category }}</p>{% endif %}
+        <p class="ref-status">{{ reference.status }}</p>
+      </div>
+      <div class="ref-actions" role="group" aria-label="Rate this reference">
+        <button
+          type="button"
+          class="choice-btn choice-like"
+          data-choice="liked"
+          aria-pressed="{{ 'true' if reference.choice == 'liked' else 'false' }}"
+          aria-label="Like this reference"
+        >&#10003;</button>
+        <button
+          type="button"
+          class="choice-btn choice-dislike"
+          data-choice="disliked"
+          aria-pressed="{{ 'true' if reference.choice == 'disliked' else 'false' }}"
+          aria-label="Dislike this reference"
+        >&#10005;</button>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No references yet. Import the board or the inbox folder above.</p>
+  {% endif %}
+</section>
+{% endblock %}

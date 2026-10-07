@@ -1,0 +1,14 @@
+# Secrets never go in git
+.env
+
+# Runtime data: database, cached reference images, photos, posts
+data/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Tool workspaces
+.superpowers/

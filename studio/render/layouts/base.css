@@ -1,0 +1,122 @@
+/* Shared by every layout. Brand values arrive as custom properties set by the
+   renderer, so nothing here names a brand, a colour or a typeface. */
+
+:root {
+  --safe-top: 5vh;
+  --safe-side: 8vw;
+  --safe-bottom: 6.5vh;
+  --logo-width: 24vw;
+  /* The clear space kept around the logo: half its height. */
+  --logo-clear: calc(var(--logo-width) / var(--logo-ratio) / 2);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+body {
+  position: relative;
+  padding: var(--safe-top) 0 var(--safe-bottom);
+  font-family: var(--font-family), sans-serif;
+  color: var(--body);
+}
+
+.logo-zone {
+  display: flex;
+  justify-content: center;
+  padding-bottom: var(--logo-clear);
+}
+
+/* Sized by width only, so the file keeps its own proportions. */
+.logo {
+  display: block;
+  width: var(--logo-width);
+  height: auto;
+}
+
+.text {
+  text-align: center;
+}
+
+.headline {
+  font-size: var(--headline-size);
+  font-weight: var(--headline-weight);
+  letter-spacing: var(--headline-tracking);
+  line-height: 1.08;
+  color: var(--headline);
+  text-wrap: balance;
+}
+
+.subline {
+  max-width: 24em;
+  margin: calc(var(--headline-size) * 0.38) auto 0;
+  font-size: calc(var(--headline-size) * 0.4);
+  font-weight: var(--body-weight);
+  line-height: 1.35;
+  color: var(--body);
+  opacity: 0.78;
+  text-wrap: balance;
+}
+
+/* Shared by the templates that take parameters, which arrive as classes on the
+   page. Hero and type only carry no classes, so nothing below reaches them. */
+
+:root {
+  /* Fractions of the width, so a margin reads the same on every side. */
+  --margin: 8vw;
+  --logo-margin: 6vw;
+  --logo-height: calc(var(--logo-width) / var(--logo-ratio));
+}
+
+.align-left .text {
+  text-align: left;
+}
+
+.align-left .subline {
+  margin-left: 0;
+}
+
+/* The shade behind words over a photo: the background colour fading in to 70%
+   from one text-height beyond the words, held behind them and on to the edge.
+   It runs the full width of the canvas, so it has no side edges. */
+.scrim .text {
+  isolation: isolate;
+}
+
+.scrim .text::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -100%;
+  bottom: -100%;
+  left: -100vw;
+  right: -100vw;
+  background: linear-gradient(
+    var(--scrim-direction),
+    transparent 0%,
+    color-mix(in srgb, var(--bg) 11%, transparent) 8.33%,
+    color-mix(in srgb, var(--bg) 35%, transparent) 16.67%,
+    color-mix(in srgb, var(--bg) 59%, transparent) 25%,
+    color-mix(in srgb, var(--bg) 70%, transparent) 33.33%,
+    color-mix(in srgb, var(--bg) 70%, transparent) 100%
+  );
+}
+
+.text-bottom {
+  --scrim-direction: to bottom;
+}
+
+.text-top {
+  --scrim-direction: to top;
+}

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block style %}
+/* Full bleed: the photo fills the canvas. The logo sits in a corner or at the
+   top centre, and the words sit over the photo along the top or the bottom.
+   The words' box is their safe area: long copy gets smaller instead of
+   climbing over the photo. */
+body {
+  padding: 0;
+}
+
+.photo {
+  position: absolute;
+  inset: 0;
+}
+
+.photo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Above the shade, which may reach its row. At a side it lines up with the
+   words' margin, so the two share one edge. */
+.logo {
+  position: absolute;
+  z-index: 1;
+}
+
+.logo-top .logo {
+  top: var(--logo-margin);
+}
+
+.logo-bottom .logo {
+  bottom: var(--logo-margin);
+}
+
+.logo-left .logo {
+  left: var(--margin);
+}
+
+.logo-centre .logo {
+  left: calc((100vw - var(--logo-width)) / 2);
+}
+
+.logo-right .logo {
+  right: var(--margin);
+}
+
+.text {
+  position: absolute;
+  left: var(--margin);
+  right: var(--margin);
+  max-height: 36vh;
+}
+
+.text-bottom .text {
+  bottom: var(--margin);
+}
+
+.text-top .text {
+  top: var(--margin);
+}
+
+/* A logo on the words' edge: the words keep a full logo height away from it,
+   twice its clear space, so the two do not compete. */
+.text-bottom.logo-bottom .text {
+  bottom: calc(var(--logo-margin) + var(--logo-height) * 2);
+}
+
+.text-top.logo-top .text {
+  top: calc(var(--logo-margin) + var(--logo-height) * 2);
+}
+{% endblock %}
+{% block body %}
+<div class="photo under-words"><img src="{{ photo_url }}" alt=""></div>
+<img class="logo" src="{{ logo_url }}" alt="">
+<main class="text">
+  <h1 class="headline">{{ headline }}</h1>
+  {% if subline %}<p class="subline">{{ subline }}</p>{% endif %}
+</main>
+{% endblock %}

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Post · Design Studio{% endblock %}
+{% block content %}
+<section class="panel post-panel">
+  {% if error %}
+  <p class="field-error" role="alert">{{ error }}</p>
+  {% endif %}
+  {% if message %}
+  <p class="result-message" role="status">{{ message }}</p>
+  {% endif %}
+  <div class="post-layout">
+    <figure class="post-figure">
+      <img class="post-image" src="/media/{{ post.image_path }}" alt="The finished post" />
+      {% if sample and sample.review %}
+      <p class="post-sample-scores">on brief {{ sample.review.on_brief }} · brand {{ sample.review.brand_fit }} · craft {{ sample.review.craft }} · overall {{ sample.review.overall }}</p>
+      {% endif %}
+      <figcaption>
+        <a class="btn" href="/media/{{ post.image_path }}" download>Download PNG</a>
+        {% if post.session_id %}
+        <a class="btn" href="/sessions/{{ post.session_id }}">Change the photo</a>
+        {% if post.sample_id %}
+        <a class="btn" href="/sessions/{{ post.session_id }}/editor?sample={{ post.sample_id }}{% if editor_from %}&amp;from={{ editor_from }}{% endif %}">Open in the editor</a>
+        {% endif %}
+        {% endif %}
+      </figcaption>
+    </figure>
+
+    <div class="post-details">
+      <p class="post-version">
+        Version {{ post.version }}
+        <span class="status-pill status-{{ post.status }}">{{ post.status }}</span>
+      </p>
+
+      {% if post.direction_title %}
+      <p class="post-direction">
+        {%- if post.session_id -%}
+        <a href="/sessions/{{ post.session_id }}#directions">Direction: {{ post.direction_title }}</a>
+        {%- else -%}
+        Direction: {{ post.direction_title }}
+        {%- endif -%}
+      </p>
+      {% endif %}
+
+      <div class="caption-block">
+        <p class="caption-text" data-caption-text>{{ post.caption }}</p>
+        <button type="button" class="btn" data-copy-caption>Copy caption</button>
+      </div>
+
+      {% if post.spec.hashtags %}
+      <p class="hashtags">{{ post.spec.hashtags | join(" ") }}</p>
+      {% endif %}
+
+      {% if post.notes %}
+      <ul class="post-warnings">
+        {% for note in post.notes %}
+        <li class="warning">{{ note }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if post.auto_summary %}
+      <p class="auto-summary">{{ post.auto_summary }}</p>
+      {% endif %}
+
+      <details class="why-panel" open>
+        <summary>Why it looks like this</summary>
+        <ul class="reasons">
+          {% if post.spec.reason_layout %}<li>{{ post.spec.reason_layout }}</li>{% endif %}
+          {% if post.spec.reason_references %}<li>{{ post.spec.reason_references }}</li>{% endif %}
+          {% if post.spec.reason_words %}<li>{{ post.spec.reason_words }}</li>{% endif %}
+        </ul>
+        {% if post.spec.assumptions %}
+        <p class="why-subhead">Assumptions</p>
+        <ul class="reasons">
+          {% for assumption in post.spec.assumptions %}<li>{{ assumption }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% if reference_thumbs %}
+        <p class="why-subhead">References it drew on</p>
+        <div class="reference-thumbs">
+          {% for reference in reference_thumbs %}
+          <img src="/media/{{ reference.image_path }}" alt="{{ reference.label or 'Reference' }}" title="{{ reference.label }}" loading="lazy" />
+          {% endfor %}
+        </div>
+        {% endif %}
+      </details>
+
+      <form method="post" action="/posts/{{ post.id }}/revise" class="revise-form">
+        <label for="comment">Ask for a change</label>
+        <textarea id="comment" name="comment" rows="3" placeholder="Make it lighter and shorten the headline."></textarea>
+        <p class="hint">Words or the photo. A photo request goes to the session's prompt.</p>
+        <button type="submit" class="btn btn-primary">Revise</button>
+      </form>
+
+      <div class="post-actions">
+        {% if post.status != "approved" %}
+        <form method="post" action="/posts/{{ post.id }}/approve" class="inline-form">
+          <button type="submit" class="btn">Approve</button>
+        </form>
+        {% endif %}
+        <form method="post" action="/quality-bar/from-post/{{ post.id }}" class="inline-form">
+          <button type="submit" class="btn btn-small">Set as the quality bar</button>
+        </form>
+      </div>
+
+      {% if versions|length > 1 %}
+      <div class="versions">
+        <p class="why-subhead">Other versions</p>
+        <div class="version-list">
+          {% for version in versions %}
+          <a class="version-pill {{ 'is-current' if version.id == post.id else '' }}" href="/posts/{{ version.id }}">
+            Version {{ version.version }}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if post.session_id %}
+      <p class="run-link"><a href="/sessions/{{ post.session_id }}">See the session that made this</a></p>
+      {% endif %}
+      <p class="run-link"><a href="/runs/{{ post.run_id }}">See the run that made this</a></p>
+    </div>
+  </div>
+</section>
+{% endblock %}

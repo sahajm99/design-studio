@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block style %}
+/* Type only: the logo at the top and the words large in open space, centred on
+   the optical middle, a little above the true centre. The words must stay
+   inside this area, so long copy gets smaller instead of crowding the logo. */
+.text {
+  position: absolute;
+  inset: 18vh var(--safe-side) 22vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+{% endblock %}
+{% block body %}
+<header class="logo-zone"><img class="logo" src="{{ logo_url }}" alt=""></header>
+<main class="text">
+  <h1 class="headline">{{ headline }}</h1>
+  {% if subline %}<p class="subline">{{ subline }}</p>{% endif %}
+</main>
+{% endblock %}

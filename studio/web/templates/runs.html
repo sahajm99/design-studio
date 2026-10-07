@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Runs · Design Studio{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Runs</h1>
+  {% if rows %}
+  <ul class="run-list">
+    {% for row in rows %}
+    <li class="run-row">
+      <a class="run-link" href="/runs/{{ row.run.id }}">{{ row.run.brief or row.run.comment or "Untitled run" }}</a>
+      <span class="run-row-meta">
+        <span class="status-pill status-{{ row.run.status }}">{{ row.run.status }}</span>
+        <span>{{ row.kind_label }}</span>
+        {% if row.run.session_id %}<a href="/sessions/{{ row.run.session_id }}">Session</a>{% endif %}
+        <time>{{ row.run.created_at.strftime("%Y-%m-%d %H:%M") }}</time>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No runs yet. Write a brief on the Studio page to start one.</p>
+  {% endif %}
+</section>
+{% endblock %}

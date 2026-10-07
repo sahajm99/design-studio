@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block style %}
+/* Custom: the designer's own arrangement from the editor. The photo fills its box,
+   the whole canvas unless the designer gave it a smaller one, and each block sits
+   where it was placed, in percent of the canvas: the shades over the photo, the
+   words over the shades and the logo on top. Every place, size, colour and face
+   arrives from the renderer, so nothing here names a brand. The canvas colour
+   shows around the photo's box, and around a photo that is fitted whole. */
+body {
+  padding: 0;
+{%- if background %}
+  background: {{ background }};
+{%- endif %}
+}
+
+.photo {
+  position: absolute;
+{%- if photo_box %}
+  left: {{ photo_box.left }}%;
+  top: {{ photo_box.top }}%;
+  width: {{ photo_box.width }}%;
+  height: {{ photo_box.height }}%;
+  overflow: hidden;
+{%- else %}
+  inset: 0;
+{%- endif %}
+}
+
+.photo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: {{ photo_fit }};
+  object-position: {{ 50 + photo_offset_x }}% {{ 50 + photo_offset_y }}%;
+}
+
+.shade,
+.headline,
+.subline,
+.logo {
+  position: absolute;
+}
+{% endblock %}
+{% block body %}
+<div class="photo"><img src="{{ photo_url }}" alt=""></div>
+{% for block in blocks -%}
+{% if block.kind == "shade" -%}
+<div class="shade" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; height: {{ block.height }}%; background: {{ block.hex }}; opacity: {{ block.opacity }}"></div>
+{% elif block.kind == "headline" -%}
+<h1 class="headline" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; font-size: {{ block.px }}px; font-family: {{ block.family }}; font-weight: {{ block.weight }};{% if block.italic %} font-style: italic;{% endif %} color: {{ block.hex }}; text-align: {{ block.align }}; margin: 0; max-width: none">{{ headline }}</h1>
+{% elif block.kind == "subline" -%}
+<p class="subline" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; font-size: {{ block.px }}px; font-family: {{ block.family }}; font-weight: {{ block.weight }};{% if block.italic %} font-style: italic;{% endif %} color: {{ block.hex }}; text-align: {{ block.align }}; margin: 0; max-width: none">{{ subline }}</p>
+{% else -%}
+<img class="logo" src="{{ logo_url }}" alt="" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%">
+{% endif -%}
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block style %}
+/* Split: the photo on one side, or on top, and a solid panel in the
+   background colour holding the logo and the words. The panel's edges are set
+   by the photo's side; the logo sits at the panel's top and the words below
+   it, never on the photo. */
+body {
+  padding: 0;
+  --panel-left: 0vw;
+  --panel-right: 0vw;
+  --panel-top: 0vh;
+}
+
+.photo-left {
+  --panel-left: 55vw;
+}
+
+.photo-right {
+  --panel-right: 55vw;
+}
+
+.photo-top {
+  --panel-top: 58vh;
+}
+
+.photo {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 55vw;
+}
+
+.photo-left .photo {
+  left: 0;
+}
+
+.photo-right .photo {
+  right: 0;
+}
+
+.photo-top .photo {
+  left: 0;
+  width: 100vw;
+  bottom: auto;
+  height: 58vh;
+}
+
+.photo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Only the horizontal part of the logo's position applies: it always sits
+   at the top of the panel. */
+.logo {
+  position: absolute;
+  top: calc(var(--panel-top) + var(--margin));
+}
+
+.logo-left .logo {
+  left: calc(var(--panel-left) + var(--margin));
+}
+
+.logo-centre .logo {
+  left: calc(var(--panel-left) + (100vw - var(--panel-left) - var(--panel-right) - var(--logo-width)) / 2);
+}
+
+.logo-right .logo {
+  right: calc(var(--panel-right) + var(--margin));
+}
+
+/* Beside the photo, the words sit on the panel's middle, in a box of the
+   middle 40% of its height, so long copy gets smaller instead of filling the
+   column. Under the photo, the words stand on the bottom margin, with the
+   logo at the head of the panel. */
+.text {
+  position: absolute;
+  left: calc(var(--panel-left) + var(--margin));
+  right: calc(var(--panel-right) + var(--margin));
+  top: 30vh;
+  bottom: 30vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.photo-top .text {
+  top: calc(var(--panel-top) + var(--margin) + var(--logo-height) + var(--logo-clear));
+  bottom: var(--margin);
+  justify-content: flex-end;
+}
+{% endblock %}
+{% block body %}
+<div class="photo"><img src="{{ photo_url }}" alt=""></div>
+<img class="logo" src="{{ logo_url }}" alt="">
+<main class="text">
+  <h1 class="headline">{{ headline }}</h1>
+  {% if subline %}<p class="subline">{{ subline }}</p>{% endif %}
+</main>
+{% endblock %}

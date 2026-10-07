@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Archive · Design Studio{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Archive</h1>
+  <p class="lede">Every photo a session has generated, across all sessions.</p>
+
+  {% if message %}
+  <p class="result-message" role="status">{{ message }}</p>
+  {% endif %}
+
+  <div class="filter-bar" role="group" aria-label="Filter the archive">
+    {% for filter in filters %}
+    <a class="filter-btn {{ 'is-active' if filter.name == active_filter else '' }}" href="/archive?filter={{ filter.name }}">{{ filter.label }}</a>
+    {% endfor %}
+  </div>
+</section>
+
+{#- Forms the buttons below submit through their `form` attribute. They are kept out of
+    the page's flow, so none of them adds a gap of its own between the panels. #}
+<div hidden>
+  <form id="delete-disliked-form" method="post" action="/archive/delete-disliked">
+    <input type="hidden" name="filter" value="{{ active_filter }}" />
+  </form>
+  {% for row in rows %}
+  <form id="start-{{ row.sample.id }}" method="post" action="/archive/{{ row.sample.id }}/start"></form>
+  <form id="edit-{{ row.sample.id }}" method="post" action="/archive/{{ row.sample.id }}/edit"></form>
+  <form id="bar-{{ row.sample.id }}" method="post" action="/quality-bar/from-sample/{{ row.sample.id }}"></form>
+  {% endfor %}
+</div>
+
+<form id="delete-selected-form" method="post" action="/archive/delete">
+  <input type="hidden" name="filter" value="{{ active_filter }}" />
+  <section class="panel">
+    <div class="toolbar">
+      <button type="submit" class="btn" data-confirm-selected>Delete selected</button>
+      <button type="submit" form="delete-disliked-form" class="btn" data-confirm-disliked="{{ disliked_total }}">Delete all disliked</button>
+    </div>
+
+    {% if rows %}
+    <div class="sample-grid archive-grid">
+      {% for row in rows %}
+      <article class="sample-card archive-card">
+        <label class="archive-select">
+          <input type="checkbox" name="ids" value="{{ row.sample.id }}" {{ "disabled" if row.sample.used_in_post_id else "" }} />
+          <span class="sr-only">Select this photo</span>
+        </label>
+        <div class="sample-photo{{ '' if row.sample.image_path else ' sample-photo-missing' }}">
+          {% if row.sample.image_path %}
+          <img src="/media/{{ row.sample.image_path }}" alt="" loading="lazy" />
+          {% else %}
+          <p class="sample-error">{{ row.sample.error }}</p>
+          {% endif %}
+        </div>
+        <p class="archive-meta">
+          <a href="/sessions/{{ row.sample.session_id }}">Session</a> · round {{ row.sample.round }}
+        </p>
+        <p class="archive-prompt">
+          {% if row.sample.provider == "upload" %}
+          Uploaded photo
+          {% else %}
+          {{ row.prompt_excerpt }}{{ "…" if row.prompt_is_long else "" }}
+          {% if row.prompt_is_long %}
+          <details class="prompt-more"><summary>more</summary>{{ row.prompt_full }}</details>
+          {% endif %}
+          {% endif %}
+        </p>
+        {% if row.sample.review %}<p class="archive-score">Overall {{ row.sample.review.overall }}</p>{% endif %}
+        <p class="archive-reaction">{{ "Not rated" if row.sample.reaction == "none" else row.sample.reaction|capitalize }}</p>
+        {% if row.sample.used_in_post_id %}<p class="archive-used">Used in a post</p>{% endif %}
+        {% if row.sample.image_path %}
+        <div class="sample-actions">
+          <button type="submit" form="start-{{ row.sample.id }}" class="btn">Start a session with this photo</button>
+          <button type="submit" form="edit-{{ row.sample.id }}" class="btn">Open in the editor</button>
+          <button type="submit" form="bar-{{ row.sample.id }}" class="btn btn-small">Set as the quality bar</button>
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty">No photos match this filter.</p>
+    {% endif %}
+  </section>
+</form>
+{% endblock %}

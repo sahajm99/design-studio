@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Studio · Design Studio{% endblock %}
+{% block content %}
+<section class="panel panel-hero">
+  <h1>Start a session</h1>
+  <p class="lede">Describe the post you want. The brand kit, and what you've liked in the library, shape the rest.</p>
+  <p class="hint studio-counts">
+    <span>Photos made today: {{ photos_today }}</span>
+    {% if research_enabled %}<span>Searches this month: {{ searches_this_month }} of {{ search_limit }}</span>{% endif %}
+  </p>
+  {% if error %}
+  <p class="field-error" role="alert">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="/sessions" class="brief-form">
+    <label class="sr-only" for="brief">Brief</label>
+    <textarea
+      id="brief"
+      name="brief"
+      rows="5"
+      placeholder="Announce our free consultation week to new patients."
+      required
+    >{{ brief_value }}</textarea>
+    <div class="mode-row">
+      <fieldset class="pill-group mode-switch">
+        <legend class="sr-only">Mode</legend>
+        <label class="pill-option">
+          <input type="radio" name="mode" value="manual" checked />
+          <span>Manual</span>
+        </label>
+        <label class="pill-option">
+          <input type="radio" name="mode" value="auto" />
+          <span>Auto</span>
+        </label>
+      </fieldset>
+      {% if research_enabled %}
+      {#- Off for Manual and on for Auto when the mode changes; the designer can change it after.
+          The script enables the hidden companion, so an unticked box is sent as off; with no
+          script, an unticked box sends nothing, and an auto session researches by default. #}
+      <input type="hidden" name="research_choice" value="on" disabled data-research-choice />
+      <label class="check-option">
+        <input type="checkbox" name="research" value="on" data-research-first />
+        <span>Research first</span>
+      </label>
+      {% endif %}
+    </div>
+    <div class="auto-limits" data-auto-limits hidden>
+      <div>
+        <label for="max_rounds">Rounds</label>
+        <input type="number" id="max_rounds" name="max_rounds" min="1" max="5" value="3" />
+      </div>
+      <div>
+        <label for="photo_budget">Photos</label>
+        <input type="number" id="photo_budget" name="photo_budget" min="1" max="12" value="6" />
+      </div>
+      <div>
+        <label for="stop_score">Stop score</label>
+        <input type="number" id="stop_score" name="stop_score" min="1" max="5" step="0.1" value="4.2" />
+      </div>
+      <p class="hint auto-limits-hint" data-auto-hint>Auto mode makes up to 6 photos on its own.</p>
+    </div>
+    <div class="brief-form-row">
+      <label for="sample_count" class="sample-count-label">Samples a round</label>
+      <input type="number" id="sample_count" name="sample_count" min="1" max="{{ max_samples }}" value="3" />
+      <button type="submit" class="btn btn-primary">Start</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Recent sessions</h2>
+  {% if sessions %}
+  <ul class="run-list">
+    {% for session in sessions %}
+    <li class="run-row">
+      <a class="run-link" href="/sessions/{{ session.id }}">{{ session.brief or "Untitled session" }}</a>
+      <span class="run-row-meta">
+        <span class="status-pill status-{{ session.status }}">{{ session.status.replace("_", " ") }}</span>
+        <time>{{ session.created_at.strftime("%Y-%m-%d %H:%M") }}</time>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No sessions yet. Write a brief above to start one.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Recent posts</h2>
+  {% if posts %}
+  <div class="contact-sheet">
+    {% for post in posts %}
+    <a class="contact-card" href="/posts/{{ post.id }}">
+      <span class="contact-thumb">
+        <img src="/media/{{ post.image_path }}" alt="" loading="lazy" />
+      </span>
+      <span class="contact-caption">
+        <span class="contact-brief">{{ post.brief }}</span>
+        <span class="contact-meta">Version {{ post.version }}, {{ post.status }}</span>
+      </span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">Nothing yet. Start a session above to make the first post.</p>
+  {% endif %}
+</section>
+{% endblock %}

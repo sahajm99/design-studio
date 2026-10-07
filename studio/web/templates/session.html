@@ -1,0 +1,599 @@
+{% extends "base.html" %}
+{% block title %}Session · Design Studio{% endblock %}
+{% block content %}
+<section class="panel panel-hero" data-session-page data-session-id="{{ session.id }}" data-poll="{{ 'true' if is_running else 'false' }}">
+  <div class="session-heading">
+    <h1>Session</h1>
+    <span class="status-pill status-{{ session.status }}">{{ session.status.replace("_", " ") }}</span>
+  </div>
+
+  {% if error %}
+  <p class="field-error" role="alert">{{ error }}</p>
+  {% endif %}
+  {#- A scout run's status line sits in the Research part. #}
+  {% if is_running and not scout_running %}
+  <div class="run-status-line-row">
+    {% if active_status %}
+    <p class="run-status-line" data-session-status role="status">
+      <span data-status-text>{{ active_status }}</span><span data-status-note>{{ (" — " + active_step_note) if active_step_note else "" }}</span>
+    </p>
+    {% endif %}
+    <form method="post" action="/sessions/{{ session.id }}/stop" class="inline-form">
+      <button type="submit" class="btn">Stop</button>
+    </form>
+    <a class="btn-link" href="/runs/{{ session.active_run_id }}">See the run</a>
+  </div>
+  {% if auto_running %}
+  <ul class="decision-list" data-auto-decisions {% if not auto_decisions %}hidden{% endif %}>
+    {% for line in auto_decisions %}<li>{{ line }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% endif %}
+
+  {% if failed_run %}
+  <div class="field-error" role="alert">
+    <p>{{ failed_run.run.error }}</p>
+    <p><a href="/runs/{{ failed_run.run.id }}">See the run</a></p>
+    {% if failed_run.run.kind == "draft" %}
+    <form method="post" action="/sessions/{{ session.id }}/brief" class="inline-form">
+      <input type="hidden" name="brief" value="{{ session.brief }}" />
+      <button type="submit" class="btn">Try again</button>
+    </form>
+    {% elif failed_run.run.kind == "samples" %}
+    <form method="post" action="/sessions/{{ session.id }}/again" class="inline-form">
+      <button type="submit" class="btn">Try again</button>
+    </form>
+    {% elif failed_run.run.kind == "revise_prompt" %}
+    <form method="post" action="/sessions/{{ session.id }}/feedback" class="inline-form">
+      <input type="hidden" name="text" value="{{ failed_run.retry_text }}" />
+      <button type="submit" class="btn">Try again</button>
+    </form>
+    {% elif failed_run.run.kind == "scout" and research_enabled %}
+    <form method="post" action="/sessions/{{ session.id }}/research/again" class="inline-form">
+      <button type="submit" class="btn">Research again</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if session.status == "needs_brief" and session.question %}
+  <p class="banner" role="status">{{ session.question }}</p>
+  {% endif %}
+
+  {% if source_sample and source_sample.image_path %}
+  <div class="source-photo-row">
+    <img class="finished-post-thumb" src="/media/{{ source_sample.image_path }}" alt="" />
+    <p class="hint">Starting from this photo.</p>
+  </div>
+  {% endif %}
+
+  <div class="brief-row">
+    <form method="post" action="/sessions/{{ session.id }}/brief" class="brief-form">
+      <label class="sr-only" for="session-brief">Brief</label>
+      <textarea id="session-brief" name="brief" rows="4" required {{ "disabled" if is_running else "" }}>{{ session.brief }}</textarea>
+      <div class="brief-actions">
+        <button type="submit" class="btn" {{ "disabled" if is_running else "" }}>{{ draft_button_label }}</button>
+        {% if session.research_on and research_enabled %}
+        {#- Researches the brief as edited here, so a brief that got a question back can try again. #}
+        <button type="submit" formaction="/sessions/{{ session.id }}/research/again" class="btn" {{ "disabled" if is_running else "" }}>Research again</button>
+        {% endif %}
+      </div>
+    </form>
+    {% if quality_bar_url %}
+    {#- The Library page shows where the bar came from and changes it. #}
+    <a class="quality-bar-thumb" href="/library">
+      <img src="{{ quality_bar_url }}" alt="" />
+      <span>Quality bar</span>
+    </a>
+    {% endif %}
+  </div>
+
+  {% if session.concept %}
+  <dl class="concept-grid">
+    <div><dt>Audience</dt><dd>{{ session.concept.audience }}</dd></div>
+    <div><dt>Idea</dt><dd>{{ session.concept.idea }}</dd></div>
+    <div><dt>Feeling</dt><dd>{{ session.concept.feeling }}</dd></div>
+    <div><dt>Offer</dt><dd>{{ session.concept.offer }}</dd></div>
+    <div><dt>Tone</dt><dd>{{ session.concept.tone }}</dd></div>
+  </dl>
+  {% endif %}
+</section>
+
+{% if show_research %}
+{#- The research is web text: escaped by the template, its line breaks kept by the stylesheet. #}
+<details class="panel research-panel" id="research" {{ "open" if research_open else "" }}>
+  <summary>Research</summary>
+  {% if scout_running %}
+  <div class="run-status-line-row">
+    <p class="run-status-line" data-session-status role="status">
+      <span data-status-text>{{ active_status }}</span><span data-status-note>{{ (" — " + active_step_note) if active_step_note else "" }}</span>
+    </p>
+    <form method="post" action="/sessions/{{ session.id }}/stop" class="inline-form">
+      <button type="submit" class="btn">Stop</button>
+    </form>
+    <a class="btn-link" href="/runs/{{ session.active_run_id }}">See the run</a>
+  </div>
+  {% endif %}
+  {% if research_view %}
+  <p class="research-status research-status-{{ research_view.status }}">{{ research_view.status_line }}</p>
+  {% if research_view.text %}<div class="research-text">{{ research_view.text }}</div>{% endif %}
+  {% if research_view.sources %}
+  <ol class="research-sources">
+    {% for source in research_view.sources %}
+    <li id="source-{{ source.number }}">
+      <span class="research-source-number">[{{ source.number }}]</span>
+      <span class="research-source-body">
+        {% if source.url %}<a href="{{ source.url }}" target="_blank" rel="noopener">{{ source.title }}</a>{% else %}<span>{{ source.title }}</span>{% endif %}
+        {% if source.domain %}<span class="research-source-domain">{{ source.domain }}</span>{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+  {% if research_view.via_tavily %}<p class="hint research-credit">Sources from the web, found through Tavily.</p>{% endif %}
+  {% endif %}
+  {% endif %}
+</details>
+{% endif %}
+
+{% if show_directions %}
+{% set off = "disabled" if is_running else "" %}
+<section class="panel directions-panel" id="directions">
+  <h2>Directions</h2>
+  {% if session.chosen_direction %}
+  <div class="direction-chosen-row">
+    <p class="direction-chosen">Direction: {{ session.chosen_direction.title }}</p>
+    <button type="button" class="btn" data-directions-toggle="direction-choices" aria-controls="direction-choices" aria-expanded="false">Change direction</button>
+  </div>
+  {% endif %}
+  {#- Once a direction is chosen, the choices fold away; "Change direction" opens them, and a
+      new pick makes a new draft in the same session. #}
+  <div class="direction-choices" id="direction-choices" {% if session.chosen_direction %}hidden{% endif %}>
+    {% if direction_rows %}<p class="hint">The studio's own suggestions.</p>{% endif %}
+    {% if directions_alike %}<p class="warning">Two of these directions are alike.</p>{% endif %}
+    {% if no_directions_note %}<p class="warning">{{ no_directions_note }}</p>{% endif %}
+    {% if direction_rows %}
+    <div class="direction-grid">
+      {% for row in direction_rows %}
+      {% set d = row.direction %}
+      {% set prefix = "direction-" ~ d.number %}
+      <article class="direction-card{{ ' is-recommended' if row.recommended else '' }}" data-direction-card>
+        {% if row.recommended or d.needs_real_photo %}
+        <div class="direction-badges">
+          {% if row.recommended %}<span class="direction-badge is-recommended">Recommended</span>{% endif %}
+          {% if d.needs_real_photo %}<a class="direction-badge needs-photo" href="#upload">Needs your own photo: upload one</a>{% endif %}
+        </div>
+        {% endif %}
+        {% if row.recommended and session.recommended_reason %}<p class="direction-reason">{{ session.recommended_reason }}</p>{% endif %}
+
+        <div class="direction-view" data-direction-view>
+          <h3 class="direction-title">{{ d.title }}</h3>
+          <p class="direction-kind">{{ row.format_label }} · {{ row.layout_label }}</p>
+          <p class="direction-angle">{{ d.angle }}</p>
+          {% if row.look %}<p class="direction-look">{{ row.look }}</p>{% endif %}
+          <dl class="direction-fields">
+            <div><dt>Headline idea</dt><dd class="direction-headline">{{ d.headline_idea }}</dd></div>
+            {% if d.facts %}
+            <div><dt>Facts</dt><dd><ul class="direction-facts">{% for fact in d.facts %}<li>{{ fact }}</li>{% endfor %}</ul></dd></div>
+            {% endif %}
+            {% if d.why %}<div><dt>Why</dt><dd>{{ d.why }}</dd></div>{% endif %}
+          </dl>
+          {% if row.chips %}
+          <p class="direction-sources">{% for number in row.chips %}<a class="source-chip" href="#source-{{ number }}">[{{ number }}]</a>{% endfor %}</p>
+          {% endif %}
+          <div class="direction-buttons">
+            <form method="post" action="/sessions/{{ session.id }}/directions/{{ d.number }}/use" class="inline-form">
+              <button type="submit" class="btn btn-primary" {{ off }}>Use this direction</button>
+            </form>
+            <button type="button" class="btn" data-direction-edit {{ off }}>Edit and use</button>
+          </div>
+        </div>
+
+        <form method="post" action="/sessions/{{ session.id }}/directions/{{ d.number }}/edit" class="direction-edit-form" data-direction-form hidden>
+          <div>
+            <label for="{{ prefix }}-title">Title</label>
+            <input type="text" id="{{ prefix }}-title" name="title" value="{{ d.title }}" maxlength="400" required {{ off }} />
+          </div>
+          <div class="field-grid">
+            <div>
+              <label for="{{ prefix }}-format">Format</label>
+              <select id="{{ prefix }}-format" name="format" {{ off }}>
+                {% for option in direction_formats %}
+                <option value="{{ option.value }}" {{ "selected" if option.value == d.format else "" }}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label for="{{ prefix }}-layout">Layout</label>
+              <select id="{{ prefix }}-layout" name="layout" {{ off }}>
+                {% for option in direction_layouts %}
+                <option value="{{ option.value }}" {{ "selected" if option.value == d.layout else "" }}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label for="{{ prefix }}-angle">Angle</label>
+            <textarea id="{{ prefix }}-angle" name="angle" rows="2" required {{ off }}>{{ d.angle }}</textarea>
+          </div>
+          <div class="field-grid">
+            <div>
+              <label for="{{ prefix }}-subject">Subject</label>
+              <input type="text" id="{{ prefix }}-subject" name="subject" value="{{ d.subject }}" maxlength="400" {{ off }} />
+            </div>
+            <div>
+              <label for="{{ prefix }}-framing">Framing</label>
+              <input type="text" id="{{ prefix }}-framing" name="framing" value="{{ d.framing }}" maxlength="400" {{ off }} />
+            </div>
+            <div>
+              <label for="{{ prefix }}-mood">Mood</label>
+              <input type="text" id="{{ prefix }}-mood" name="mood" value="{{ d.mood }}" maxlength="400" {{ off }} />
+            </div>
+          </div>
+          <div>
+            <label for="{{ prefix }}-headline">Headline idea</label>
+            <input type="text" id="{{ prefix }}-headline" name="headline_idea" value="{{ d.headline_idea }}" maxlength="400" required {{ off }} />
+          </div>
+          <div>
+            <label for="{{ prefix }}-facts">Facts</label>
+            <textarea id="{{ prefix }}-facts" name="facts" rows="3" {{ off }}>{{ row.facts_text }}</textarea>
+          </div>
+          <div>
+            <label for="{{ prefix }}-why">Why</label>
+            <textarea id="{{ prefix }}-why" name="why" rows="2" {{ off }}>{{ d.why }}</textarea>
+          </div>
+          <div class="direction-buttons">
+            <button type="submit" class="btn btn-primary" {{ off }}>Use this direction</button>
+            <button type="button" class="btn-link" data-direction-cancel>Cancel</button>
+          </div>
+        </form>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="direction-actions">
+      {% if session.research %}
+      <form method="post" action="/sessions/{{ session.id }}/directions/again" class="inline-form">
+        <button type="submit" class="btn" {{ off }}>Other directions</button>
+      </form>
+      {% endif %}
+      {% if research_enabled %}
+      <form method="post" action="/sessions/{{ session.id }}/research/again" class="inline-form">
+        <button type="submit" class="btn" {{ off }}>Research again</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/sessions/{{ session.id }}/directions/skip" class="inline-form">
+        <button type="submit" class="btn" {{ off }}>Draft without a direction</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{% if current_version %}
+<section class="panel">
+  <h2>Prompt and words</h2>
+  <div class="prompt-form-row">
+    <form method="post" action="/sessions/{{ session.id }}/generate" class="prompt-form">
+      <label for="photo_prompt">Photo prompt</label>
+      <textarea id="photo_prompt" name="photo_prompt" rows="6" required {{ "disabled" if is_running else "" }}>{{ current_version.photo_prompt }}</textarea>
+
+      <div class="field-grid">
+        <div>
+          <label for="headline">Headline</label>
+          <input type="text" id="headline" name="headline" value="{{ current_version.headline }}" required {{ "disabled" if is_running else "" }} />
+        </div>
+        <div>
+          <label for="subline">Subline</label>
+          <input type="text" id="subline" name="subline" value="{{ current_version.subline }}" {{ "disabled" if is_running else "" }} />
+        </div>
+      </div>
+
+      <label for="caption">Caption</label>
+      <textarea id="caption" name="caption" rows="3" {{ "disabled" if is_running else "" }}>{{ current_version.caption }}</textarea>
+
+      <label for="hashtags">Hashtags</label>
+      <input type="text" id="hashtags" name="hashtags" value="{{ hashtags_text }}" placeholder="#clinic #care" {{ "disabled" if is_running else "" }} />
+
+      <div class="choice-row">
+        <fieldset class="pill-group">
+          <legend>Mode</legend>
+          <label class="pill-option">
+            <input type="radio" name="mode" value="dark" {{ "checked" if current_version.mode == "dark" else "" }} {{ "disabled" if is_running else "" }} />
+            <span>Dark</span>
+          </label>
+          <label class="pill-option">
+            <input type="radio" name="mode" value="light" {{ "checked" if current_version.mode == "light" else "" }} {{ "disabled" if is_running else "" }} />
+            <span>Light</span>
+          </label>
+        </fieldset>
+        <fieldset class="pill-group">
+          <legend>Layout</legend>
+          {%- for value, label in [("hero", "Hero photo"), ("full_bleed", "Full bleed"), ("split", "Split"), ("corner", "Corner"), ("caption_strip", "Caption strip"), ("type_only", "Words only")] %}
+          <label class="pill-option">
+            <input type="radio" name="layout" value="{{ value }}" {{ "checked" if current_version.layout == value else "" }} {{ "disabled" if is_running else "" }} />
+            <span>{{ label }}</span>
+          </label>
+          {%- endfor %}
+        </fieldset>
+        <div class="sample-count-field">
+          <label for="sample_count">Samples a round</label>
+          <input type="number" id="sample_count" name="sample_count" min="1" max="{{ max_samples }}" value="{{ session.sample_count }}" {{ "disabled" if is_running else "" }} />
+          <p class="hint">Photos made today: {{ photos_today }}</p>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary" {{ "disabled" if is_running else "" }}>Generate</button>
+    </form>
+    {% if show_reset %}
+    <form method="post" action="/sessions/{{ session.id }}/reset" class="inline-form">
+      <button type="submit" class="btn-link">Reset to the agent's version</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if current_version.reason_prompt %}<p class="version-reason">{{ current_version.reason_prompt }}</p>{% endif %}
+  {% if current_version.reason_words %}<p class="version-reason">{{ current_version.reason_words }}</p>{% endif %}
+
+  {% if current_version.banned_terms_left %}
+  {% for term in current_version.banned_terms_left %}
+  <p class="warning">The prompt still mentions "{{ term }}".</p>
+  {% endfor %}
+  {% endif %}
+
+  <p class="version-label">{{ current_version_label }}</p>
+
+  {% if previous_version %}
+  <details class="prompt-diff">
+    <summary>What changed from version {{ previous_version.number }}</summary>
+    {% if current_version.changes %}
+    <ul class="change-list">
+      {% for change in current_version.changes %}<li>{{ change }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    <p class="diff-text">{{ diff_html }}</p>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel upload-panel" id="upload">
+  <form method="post" action="/sessions/{{ session.id }}/upload" enctype="multipart/form-data" class="upload-form">
+    <label for="upload-photo">Upload a photo</label>
+    <div class="upload-row">
+      <input type="file" id="upload-photo" name="photo" accept="image/png,image/jpeg" required {{ "disabled" if is_running else "" }} />
+      <button type="submit" class="btn" {{ "disabled" if is_running else "" }}>Upload</button>
+    </div>
+    <p class="hint">A PNG or a JPEG, up to 15 MB.</p>
+  </form>
+</section>
+
+{% if rounds %}
+<section class="rounds-section" id="rounds">
+  <h2>Rounds</h2>
+  {% for round in rounds %}
+  <div class="panel round-panel">
+    <h3>{% if round.round == 0 %}Your photos{% else %}Round {{ round.round }}{% endif %}</h3>
+    {% if round.review and round.review.note %}
+    <p class="round-note">{{ round.review.note }}</p>
+    {% elif round.ranking_skipped %}
+    <p class="round-note hint">Ranking skipped.</p>
+    {% endif %}
+    <div class="sample-grid">
+      {% for sample in round.samples %}
+      <article class="sample-card {{ 'is-rejected' if sample.status == 'rejected' else '' }}" data-sample-id="{{ sample.id }}" data-reaction="{{ sample.reaction }}" data-status="{{ sample.status }}">
+        <div class="sample-photo{{ '' if sample.image_path else ' sample-photo-missing' }}">
+          {% if sample.image_path %}
+          <img src="/media/{{ sample.image_path }}" alt="" loading="lazy" />
+          {% else %}
+          <p class="sample-error">{{ sample.error }}</p>
+          {% endif %}
+          {% if sample.recommended %}<span class="recommended-badge">Recommended</span>{% endif %}
+        </div>
+
+        {% if sample.review %}
+        <p class="sample-scores">on brief {{ sample.review.on_brief }} · brand {{ sample.review.brand_fit }} · craft {{ sample.review.craft }} · overall {{ sample.review.overall }}</p>
+        {% if sample.review.flags %}
+        <div class="flag-row">
+          {% for flag in sample.review.flags %}<span class="flag-chip">{{ flag.replace("_", " ") }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        <p class="sample-verdict" title="{{ sample.review.suggested_change }}">{{ sample.review.verdict }}</p>
+        {% if sample.rank %}
+        <p class="sample-rank">Rank {{ sample.rank }} of {{ round.rank_total }}</p>
+        {% if sample.rank_reason %}<p class="sample-rank-reason">{{ sample.rank_reason }}</p>{% endif %}
+        {% endif %}
+        {% elif sample.image_path %}
+        <p class="sample-unscored">Not scored.</p>
+        {% endif %}
+
+        <div class="sample-reactions" role="group" aria-label="React to this sample">
+          <button type="button" class="choice-btn choice-like" data-choice="liked" aria-pressed="{{ 'true' if sample.reaction == 'liked' else 'false' }}" aria-label="Like this sample">&#10003;</button>
+          <button type="button" class="choice-btn choice-dislike" data-choice="disliked" aria-pressed="{{ 'true' if sample.reaction == 'disliked' else 'false' }}" aria-label="Dislike this sample">&#10005;</button>
+        </div>
+        <label class="sr-only" for="comment-{{ sample.id }}">Comment on this sample</label>
+        <textarea id="comment-{{ sample.id }}" class="sample-comment" data-sample-comment rows="2" placeholder="What would you change?">{{ sample.comment }}</textarea>
+        <p class="sample-comment-hint">Keeps this look; your comment says what to change.</p>
+
+        {% if sample.image_path %}
+        {#- Composing takes the current prompt's words, so before there is a prompt a photo of
+            round 0 goes to the editor only, whose Preview writes the first version. #}
+        {% set needs_prompt = sample.round == 0 and not current_version %}
+        <div class="sample-actions">
+          {% if not needs_prompt %}
+          <form method="post" action="/sessions/{{ session.id }}/use/{{ sample.id }}" class="inline-form">
+            <button type="submit" class="btn" {{ "disabled" if is_running else "" }}>{{ "Compose with this photo" if sample.round == 0 else "Use this photo" }}</button>
+          </form>
+          {% endif %}
+          <a class="btn" href="/sessions/{{ session.id }}/editor?sample={{ sample.id }}">Open in the editor</a>
+          <form method="post" action="/quality-bar/from-sample/{{ sample.id }}" class="inline-form">
+            <button type="submit" class="btn btn-small">Set as the quality bar</button>
+          </form>
+        </div>
+        {% if needs_prompt %}
+        <p class="hint">Write a brief and draft it first to compose this photo, or open the editor.</p>
+        {% endif %}
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+
+    {#- Feedback is about a generated round, so the designer's own photos take none. #}
+    {% if loop.first and round.round != 0 %}
+    <form method="post" action="/sessions/{{ session.id }}/feedback" class="round-feedback-form">
+      <label class="sr-only" for="feedback-{{ round.round }}">Feedback on this round</label>
+      <textarea id="feedback-{{ round.round }}" name="text" rows="2" placeholder="What should change?" {{ "disabled" if is_running else "" }}>{{ round.feedback.text if round.feedback else "" }}</textarea>
+      <div class="round-feedback-actions">
+        <button type="submit" class="btn btn-primary" {{ "disabled" if is_running else "" }}>Revise the prompt with this feedback</button>
+        <button type="submit" formaction="/sessions/{{ session.id }}/again" class="btn" {{ "disabled" if is_running else "" }}>Generate again</button>
+      </div>
+    </form>
+    {% elif round.feedback %}
+    <p class="round-feedback-existing">Feedback: {{ round.feedback.text }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if show_layout %}
+<section class="panel" id="layout">
+  <h2>Layout</h2>
+  {% if candidates %}
+  <div class="sample-grid candidate-grid">
+    {% for row in candidates %}
+    <article class="sample-card candidate-card">
+      {% if row.candidate.id == session.picked_candidate_id %}<span class="recommended-badge">Used</span>{% endif %}
+      <div class="sample-photo">
+        <img src="/media/{{ row.candidate.image_path }}" alt="" loading="lazy" />
+      </div>
+      <p class="candidate-caption">{{ row.caption }}</p>
+      {#- A custom layout has no template parameters to adjust; the editor changes it. #}
+      {% set is_custom = row.candidate.composition.template == "custom" %}
+      {% if is_custom %}
+      {#- What the renderer changed in the designer's arrangement, or found wrong with it. #}
+      {% for line in row.candidate.render_report.adjustments %}
+      <p class="hint">{{ line }}</p>
+      {% endfor %}
+      {% elif row.candidate.render_report.scrim_added %}
+      <p class="hint">A shade was added behind the words for contrast.</p>
+      {% endif %}
+      <div class="candidate-actions">
+        <form method="post" action="/sessions/{{ session.id }}/finish/{{ row.candidate.id }}" class="inline-form">
+          <button type="submit" class="btn btn-primary" {{ "disabled" if is_running else "" }}>Use this layout</button>
+        </form>
+        {% if not is_custom %}
+        <button type="button" class="btn-link" data-adjust-toggle="adjust-{{ row.candidate.id }}">Adjust</button>
+        {% endif %}
+        <a class="btn-link" href="/sessions/{{ session.id }}/editor?sample={{ row.candidate.sample_id }}&amp;from={{ row.candidate.id }}">Edit this layout</a>
+      </div>
+      {% if not is_custom %}
+      <form method="post" action="/sessions/{{ session.id }}/compose/preview" class="adjust-form" id="adjust-{{ row.candidate.id }}" hidden>
+        <div class="field-grid">
+          <div>
+            <label for="template-{{ row.candidate.id }}">Template</label>
+            <select id="template-{{ row.candidate.id }}" name="template" data-adjust-field="template">
+              {% for option in allowed_templates %}
+              <option value="{{ option }}" {{ "selected" if option == row.candidate.composition.template else "" }}>{{ option.replace("_", " ")|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="logo-{{ row.candidate.id }}">Logo position</label>
+            <select id="logo-{{ row.candidate.id }}" name="logo_position" data-adjust-field="logo_position">
+              <option value="top_left" {{ "selected" if row.candidate.composition.logo_position == "top_left" else "" }}>Top left</option>
+              <option value="top_centre" {{ "selected" if row.candidate.composition.logo_position == "top_centre" else "" }}>Top centre</option>
+              <option value="top_right" {{ "selected" if row.candidate.composition.logo_position == "top_right" else "" }}>Top right</option>
+              <option value="bottom_left" {{ "selected" if row.candidate.composition.logo_position == "bottom_left" else "" }}>Bottom left</option>
+              <option value="bottom_centre" {{ "selected" if row.candidate.composition.logo_position == "bottom_centre" else "" }}>Bottom centre</option>
+              <option value="bottom_right" {{ "selected" if row.candidate.composition.logo_position == "bottom_right" else "" }}>Bottom right</option>
+            </select>
+          </div>
+          <div>
+            <label for="textpos-{{ row.candidate.id }}">Text position</label>
+            <select id="textpos-{{ row.candidate.id }}" name="text_position" data-adjust-field="text_position">
+              <option value="top" {{ "selected" if row.candidate.composition.text_position == "top" else "" }}>Top</option>
+              <option value="bottom" {{ "selected" if row.candidate.composition.text_position == "bottom" else "" }}>Bottom</option>
+            </select>
+          </div>
+          <div>
+            <label for="textalign-{{ row.candidate.id }}">Text align</label>
+            <select id="textalign-{{ row.candidate.id }}" name="text_align" data-adjust-field="text_align">
+              <option value="left" {{ "selected" if row.candidate.composition.text_align == "left" else "" }}>Left</option>
+              <option value="centre" {{ "selected" if row.candidate.composition.text_align == "centre" else "" }}>Centre</option>
+            </select>
+          </div>
+          <div>
+            <label for="photoside-{{ row.candidate.id }}">Photo side</label>
+            <select id="photoside-{{ row.candidate.id }}" name="photo_side" data-adjust-field="photo_side">
+              <option value="left" {{ "selected" if row.candidate.composition.photo_side == "left" else "" }}>Left</option>
+              <option value="right" {{ "selected" if row.candidate.composition.photo_side == "right" else "" }}>Right</option>
+              <option value="top" {{ "selected" if row.candidate.composition.photo_side == "top" else "" }}>Top</option>
+            </select>
+          </div>
+          <div>
+            <label for="scrim-{{ row.candidate.id }}">Shade</label>
+            <select id="scrim-{{ row.candidate.id }}" name="scrim" data-adjust-field="scrim">
+              <option value="auto" {{ "selected" if row.candidate.composition.scrim == "auto" else "" }}>Auto</option>
+              <option value="on" {{ "selected" if row.candidate.composition.scrim == "on" else "" }}>On</option>
+              <option value="off" {{ "selected" if row.candidate.composition.scrim == "off" else "" }}>Off</option>
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="btn" {{ "disabled" if is_running else "" }}>Preview</button>
+      </form>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% elif is_running %}
+  <p class="hint">Rendering the layouts…</p>
+  {% endif %}
+
+  {% if has_more_layouts %}
+  <form method="post" action="/sessions/{{ session.id }}/compose/more" class="inline-form">
+    <button type="submit" class="btn" {{ "disabled" if is_running else "" }}>More layouts</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if show_auto_trace %}
+<details class="panel auto-trace" open>
+  <summary>How it was made</summary>
+  <ul class="decision-list">
+    {% for line in auto_decisions %}<li>{{ line }}</li>{% endfor %}
+  </ul>
+</details>
+{% endif %}
+
+{% if post %}
+<section class="panel finished-post-panel">
+  <h2>The finished post</h2>
+  <div class="finished-post-row">
+    <img class="finished-post-thumb" src="/media/{{ post.image_path }}" alt="" />
+    <div class="finished-post-actions">
+      <a class="btn btn-primary" href="/posts/{{ post.id }}">Open the post</a>
+      <a class="btn" href="#rounds">Change the photo</a>
+      {% if candidates %}
+      <a class="btn" href="#layout">Change the layout</a>
+      {% endif %}
+      {% if post.sample_id and session.picked_candidate_id %}
+      <a class="btn" href="/sessions/{{ session.id }}/editor?sample={{ post.sample_id }}&amp;from={{ session.picked_candidate_id }}">Edit the layout</a>
+      {% endif %}
+    </div>
+  </div>
+  {#- The auto run's final check judged the post it made, not one finished later by hand. #}
+  {% if final_review and post.auto_summary %}
+  <div class="final-check">
+    {% if picked_layout %}<p class="final-check-picked">Final check picked {{ picked_layout }}.</p>{% endif %}
+    {#- The critic's line on each post it compared, in the order they were shown. #}
+    {% for reason in final_review.reasons %}
+    {% if reason.strip() %}<p class="final-check-picked">Post {{ loop.index }}: {{ reason.strip() }}</p>{% endif %}
+    {% endfor %}
+    <p class="final-check-line">Final check: {{ final_review.score }} of 5{% if not final_review.ship %}, would not ship as it is{% endif %}.{% if final_review.biggest_flaw %} Biggest flaw: {{ final_review.biggest_flaw }}{% endif %}</p>
+    {% if final_review.fix_hint %}<p class="final-check-hint">{{ final_review.fix_hint }}</p>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

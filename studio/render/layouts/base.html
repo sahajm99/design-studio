@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+{{ brand_style }}
+<style>
+{% include "base.css" %}
+</style>
+<style>
+{% block style %}{% endblock %}
+</style>
+</head>
+{#- The composition's parameters arrive as classes on the page. Hero and type only take none. #}
+{% set classes = page_classes | default("") -%}
+<body{% if classes %} class="{{ classes }}"{% endif %}>
+{% block body %}{% endblock %}
+<script>{{ fit_script }}</script>
+</body>
+</html>

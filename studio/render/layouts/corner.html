@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block style %}
+/* Corner: the headline large at the top left on solid colour, the photo
+   bleeding in from the bottom right, and the logo on the bottom row. The
+   words always read from the left, and their box ends above the photo. */
+body {
+  padding: 0;
+}
+
+/* The photo's left and top edges fade into the canvas over about 12% of its
+   box, eased so no edge shows: one fade on the box and one on the image, so
+   the two multiply in the corner where they meet. */
+.photo {
+  position: absolute;
+  left: 36vw;
+  top: 44vh;
+  right: 0;
+  bottom: 0;
+  mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    rgb(0 0 0 / 0.16) 3%,
+    rgb(0 0 0 / 0.5) 6%,
+    rgb(0 0 0 / 0.84) 9%,
+    black 12%
+  );
+}
+
+.photo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgb(0 0 0 / 0.16) 3%,
+    rgb(0 0 0 / 0.5) 6%,
+    rgb(0 0 0 / 0.84) 9%,
+    black 12%
+  );
+}
+
+.text {
+  position: absolute;
+  left: var(--margin);
+  top: 9vh;
+  width: 62vw;
+  height: 31vh;
+  text-align: left;
+}
+
+.subline {
+  margin-left: 0;
+}
+
+/* Only the horizontal part of the logo's position applies: it always sits on
+   the bottom row. At a side it lines up with the words' margin. */
+.logo {
+  position: absolute;
+  bottom: var(--logo-margin);
+}
+
+.logo-left .logo {
+  left: var(--margin);
+}
+
+.logo-centre .logo {
+  left: calc((100vw - var(--logo-width)) / 2);
+}
+
+.logo-right .logo {
+  right: var(--margin);
+}
+{% endblock %}
+{% block body %}
+<div class="photo"><img src="{{ photo_url }}" alt=""></div>
+<img class="logo" src="{{ logo_url }}" alt="">
+<main class="text">
+  <h1 class="headline">{{ headline }}</h1>
+  {% if subline %}<p class="subline">{{ subline }}</p>{% endif %}
+</main>
+{% endblock %}

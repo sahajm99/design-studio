@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Editor · Design Studio{% endblock %}
+{% block content %}
+{#- A row of colour choices: the brand's own colour for the role first, then the palette. #}
+{%- macro swatches(group, legend, palette) %}
+<fieldset class="swatch-group" data-swatches="{{ group }}">
+  <legend>{{ legend }}</legend>
+  <div class="swatch-row">
+    <label class="swatch swatch-brand" title="Brand colour">
+      <input type="radio" name="{{ group }}" value="" />
+      <span class="swatch-dot" data-brand-swatch></span>
+      <span class="sr-only">Brand colour</span>
+    </label>
+    {%- for colour in palette %}
+    <label class="swatch" title="{{ colour.name.replace('_', ' ') }}">
+      <input type="radio" name="{{ group }}" value="{{ colour.name }}" />
+      <span class="swatch-dot" style="--swatch: {{ colour.hex }}"></span>
+      <span class="sr-only">{{ colour.name.replace("_", " ") }}</span>
+    </label>
+    {%- endfor %}
+  </div>
+  <p class="hint swatch-name" data-swatch-name></p>
+</fieldset>
+{%- endmacro %}
+
+<section class="panel editor-intro">
+  <h1>Editor</h1>
+  <p class="hint">Drag a block to move it, or drag its edges and corners to resize it. Click the photo to move or resize it and to see its settings.</p>
+</section>
+
+<div class="editor" data-editor>
+  <div class="editor-stage">
+    <div class="editor-canvas" data-editor-canvas>
+      <div class="editor-photo-box" data-editor-photo-box>
+        <img class="editor-photo" data-editor-photo src="/media/{{ sample.image_path }}" alt="" draggable="false" />
+      </div>
+      <div class="editor-selection" data-editor-selection hidden>
+        {%- for handle in ["nw", "n", "ne", "e", "se", "s", "sw", "w"] %}
+        <span class="editor-handle" data-editor-handle="{{ handle }}"></span>
+        {%- endfor %}
+      </div>
+    </div>
+    <figure class="editor-preview" data-editor-preview hidden>
+      <img data-editor-preview-image alt="The preview" />
+      <figcaption>
+        <ul class="editor-adjustments" data-editor-adjustments hidden></ul>
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="panel editor-panel">
+    <div class="editor-words">
+      <label for="editor-headline">Headline</label>
+      <input type="text" id="editor-headline" name="headline" value="{{ headline }}" data-editor-word="headline" />
+      <label for="editor-subline">Subline</label>
+      <input type="text" id="editor-subline" name="subline" value="{{ subline }}" data-editor-word="subline" />
+    </div>
+
+    <div class="editor-group">
+      <h2 data-editor-block-name hidden></h2>
+      <p class="hint" data-editor-no-block>Choose a block on the canvas.</p>
+      <div class="editor-part" data-editor-for="text" hidden>
+        <div>
+          <label for="editor-font">Font</label>
+          <select id="editor-font" data-editor-font>
+            {%- for face in editor_data.faces %}
+            <option value="{{ face.name }}">{{ face.name }}</option>
+            {%- endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="editor-weight">Weight</label>
+          <select id="editor-weight" data-editor-weight>
+            <option value="0">Brand default</option>
+            <option value="100">100 Thin</option>
+            <option value="200">200 Extra light</option>
+            <option value="300">300 Light</option>
+            <option value="400">400 Regular</option>
+            <option value="500">500 Medium</option>
+            <option value="600">600 Semibold</option>
+            <option value="700">700 Bold</option>
+            <option value="800">800 Extra bold</option>
+            <option value="900">900 Black</option>
+          </select>
+        </div>
+        <div class="editor-italic">
+          <label class="editor-toggle"><input type="checkbox" data-editor-italic /><span>Italic</span></label>
+          <p class="hint" data-editor-no-italic hidden>No italic for this face</p>
+        </div>
+        <div>
+          <label for="editor-size">Size</label>
+          <div class="editor-number">
+            <input type="number" id="editor-size" min="12" max="400" step="1" data-editor-size />
+            <span class="hint">px</span>
+          </div>
+        </div>
+        <fieldset class="pill-group">
+          <legend>Alignment</legend>
+          <label class="pill-option"><input type="radio" name="align" value="left" /><span>Left</span></label>
+          <label class="pill-option"><input type="radio" name="align" value="centre" /><span>Centre</span></label>
+        </fieldset>
+      </div>
+      <div class="editor-part" data-editor-for="text shade" hidden>
+        {{ swatches("colour", "Colour", palette) }}
+      </div>
+      <div class="editor-part" data-editor-for="shade" hidden>
+        <div>
+          <label for="editor-opacity">Opacity</label>
+          <input type="range" id="editor-opacity" min="0" max="1" step="0.05" data-editor-opacity />
+        </div>
+        <button type="button" class="btn" data-editor-remove-shade>Remove the shade</button>
+      </div>
+      <div class="editor-part" data-editor-for="photo" hidden>
+        <fieldset class="pill-group">
+          <legend>Fit</legend>
+          <label class="pill-option"><input type="radio" name="photo_fit" value="cover" /><span>Cover</span></label>
+          <label class="pill-option"><input type="radio" name="photo_fit" value="contain" /><span>Contain</span></label>
+        </fieldset>
+        <div class="pan-pad" role="group" aria-label="Move the photo">
+          <button type="button" class="btn" data-pan="up" aria-label="Move the photo up">&uarr;</button>
+          <button type="button" class="btn" data-pan="left" aria-label="Move the photo left">&larr;</button>
+          <button type="button" class="btn" data-pan="right" aria-label="Move the photo right">&rarr;</button>
+          <button type="button" class="btn" data-pan="down" aria-label="Move the photo down">&darr;</button>
+        </div>
+        <button type="button" class="btn" data-editor-fill>Fill the canvas</button>
+        {{ swatches("background", "Background colour", palette) }}
+      </div>
+    </div>
+
+    <div class="editor-group">
+      <button type="button" class="btn" data-editor-add-shade>Add a shade</button>
+    </div>
+
+    <div class="editor-group">
+      <fieldset class="pill-group">
+        <legend>Post mode</legend>
+        <label class="pill-option"><input type="radio" name="mode" value="dark" {{ "checked" if mode == "dark" else "" }} /><span>Dark</span></label>
+        <label class="pill-option"><input type="radio" name="mode" value="light" {{ "checked" if mode == "light" else "" }} /><span>Light</span></label>
+      </fieldset>
+      <div>
+        <label for="editor-logo-width">Logo width</label>
+        <div class="editor-number">
+          <input type="number" id="editor-logo-width" min="14" max="92" step="1" data-editor-logo-width />
+          <span class="hint">%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="editor-actions">
+    <div class="editor-buttons">
+      <button type="button" class="btn" data-editor-preview-button>Preview</button>
+      <form method="post" class="inline-form" data-editor-finish>
+        <button type="submit" class="btn btn-primary" data-editor-finish-button disabled>Use this layout</button>
+      </form>
+      <a class="btn" href="/sessions/{{ session.id }}">Back to the session</a>
+    </div>
+    <p class="hint" data-editor-stale hidden>Preview again to use this layout.</p>
+    <p class="hint editor-status" role="status" data-editor-status></p>
+    <p class="field-error" role="alert" data-editor-error hidden></p>
+  </div>
+</div>
+
+<script type="application/json" id="editor-data">{{ editor_data | tojson }}</script>
+<script src="/static/editor.js" defer></script>
+{% endblock %}

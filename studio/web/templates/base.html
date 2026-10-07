@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Design Studio{% endblock %}</title>
+    <script>
+      // Set the saved theme before anything paints, so there is no flash of the
+      // wrong theme. With nothing saved, the CSS alone follows the system setting.
+      (function () {
+        try {
+          var saved = localStorage.getItem("theme");
+          if (saved === "dark" || saved === "light") {
+            document.documentElement.setAttribute("data-theme", saved);
+          }
+        } catch (error) {
+          /* localStorage can be unavailable; the system setting still applies. */
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <header class="top-bar">
+      <div class="top-bar-row">
+        <a class="wordmark" href="/studio">
+          <span class="wordmark-studio">Design Studio</span>
+          <span class="wordmark-brand">{{ brand_name }}</span>
+        </a>
+        <div class="top-bar-actions">
+          <nav class="top-nav" aria-label="Main">
+            <a href="/studio">Studio</a>
+            <a href="/library">Library</a>
+            <a href="/archive">Archive</a>
+            <a href="/editor">Editor</a>
+            <a href="/runs">Runs</a>
+          </nav>
+          <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch theme"></button>
+        </div>
+      </div>
+      {% if demo_mode or not has_photo_source %}
+      <div class="banner-stack">
+        {% if demo_mode %}
+        <p class="banner">Demo mode: no model key is set, so posts are written by a stand-in.</p>
+        {% endif %}
+        {% if not has_photo_source %}
+        <p class="banner">No photo source is set, so samples cannot be made.</p>
+        {% endif %}
+      </div>
+      {% endif %}
+    </header>
+    <main class="page">{% block content %}{% endblock %}</main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

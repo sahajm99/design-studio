@@ -1,0 +1,30 @@
+services:
+  studio:
+    build: .
+    image: design-studio:dev
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      STUDIO_DATA_DIR: /app/data
+      STUDIO_DB_PATH: /app/db/studio.db
+      STUDIO_BRANDS_DIR: /app/brands
+    volumes:
+      # Code is mounted so an edit needs a restart, not a rebuild.
+      - ./studio:/app/studio
+      - ./tests:/app/tests
+      - ./brands:/app/brands:ro
+      # Posts, photos and cached references, visible on the host.
+      - ./data:/app/data
+      # The database lives in a named volume, away from file-sync tools on the host.
+      - studio-db:/app/db
+      # The sample-output script and where it writes.
+      - ./scripts:/app/scripts
+      - ./samples:/app/samples
+    init: true
+    ipc: host
+
+volumes:
+  studio-db:

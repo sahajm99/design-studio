@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block style %}
+/* Hero: the logo at the top, one photo melting into the canvas, and the words
+   beneath it on solid colour. */
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Takes all the room the words leave, but never less than this. */
+.photo {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 44vh;
+  margin-bottom: calc(var(--headline-size) * 0.25);
+}
+
+.photo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Built from the background colour: a soft fade at the top edge and a long one
+   at the bottom, eased so the photo melts into the canvas. */
+.photo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    var(--bg) 0%,
+    color-mix(in srgb, var(--bg) 84%, transparent) 4.5%,
+    color-mix(in srgb, var(--bg) 50%, transparent) 9%,
+    color-mix(in srgb, var(--bg) 16%, transparent) 13.5%,
+    transparent 18%,
+    transparent 56%,
+    color-mix(in srgb, var(--bg) 16%, transparent) 67%,
+    color-mix(in srgb, var(--bg) 50%, transparent) 78%,
+    color-mix(in srgb, var(--bg) 84%, transparent) 89%,
+    var(--bg) 100%
+  );
+}
+
+.text {
+  flex: none;
+  margin: 0 var(--safe-side);
+}
+{% endblock %}
+{% block body %}
+<header class="logo-zone"><img class="logo" src="{{ logo_url }}" alt=""></header>
+<div class="photo"><img src="{{ photo_url }}" alt=""></div>
+<main class="text">
+  <h1 class="headline">{{ headline }}</h1>
+  {% if subline %}<p class="subline">{{ subline }}</p>{% endif %}
+</main>
+{% endblock %}

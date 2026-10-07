@@ -1,0 +1,61 @@
+# The Hybridge brand kit, in the studio's format.
+# Colours, type and logo rules are taken from README.md in this folder.
+# The audience line is taken from the assessment brief.
+
+name: Hybridge
+audience: People who are thinking about dental implants.
+feel: >-
+  Premium, sleek and restrained. One strong image, few words and plenty of space.
+  Colour only where it carries meaning. Nothing loud or crowded.
+rules:
+  - Sentence case. Avoid tracked capitals.
+  - Few words and one strong image.
+  - Use the logo files as they are. Never stretch, crop or add effects to them.
+  - Keep other elements clear of the logo.
+
+colours:
+  - { name: logo_navy, hex: "#00305E", use: The wordmark in the logo }
+  - { name: h_mark_blue, hex: "#044A9C", use: The H mark }
+  - { name: heading_blue, hex: "#0F4B7B", use: Headlines and titles }
+  - { name: ink, hex: "#18181B", use: "Body text, buttons" }
+  - { name: ink_soft, hex: "#52525B", use: Secondary text }
+  - { name: ink_faint, hex: "#A1A1AA", use: Quiet labels }
+  - { name: line, hex: "#E4E4E7", use: Borders and hairlines }
+  - { name: wash, hex: "#F4F4F5", use: Soft fills }
+  - { name: porcelain, hex: "#F3F4F7", use: Backgrounds }
+  - { name: white, hex: "#FFFFFF", use: Cards and backgrounds }
+
+# Which palette colours play which role on a dark and on a light post.
+modes:
+  dark: { background: ink, headline: white, body: porcelain }
+  light: { background: porcelain, headline: heading_blue, body: ink }
+
+typography:
+  family: Inter
+  regular_file: fonts/InterVariable.ttf
+  italic_file: fonts/InterVariable-Italic.ttf
+  headline_weight: 700
+  body_weight: 400
+  headline_tracking: "-0.02em"
+  # The studio's own open-licence faces may be offered in the editor beside Inter.
+  studio_fonts: true
+
+logos:
+  lockup_file: logo/hybridge-logo.png
+  mark_file: logo/hybridge-icon.png
+  # The kit has no white logo. Its README allows a plain white knockout on dark backgrounds.
+  dark_background: knockout_white
+
+post_size: { width: 1080, height: 1350 }
+
+inspiration_board: inspiration-board.html
+
+# v4: what web research may do for this brand, before the directions are written.
+research:
+  field: dental implants
+  location: United States
+  trend_appetite: formats
+  occasions:
+    - { name: World Oral Health Day, when: 20 March }
+    - { name: National Dental Hygiene Month, when: October, note: United States }
+  avoid: [prices, competitor names, before-and-after photos, promises of outcomes]
