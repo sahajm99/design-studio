@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\runtime-architecture.json",
+    "sha256": "7b7dc52057c78332cb3b26aa945a60dfeaeb2ec10d761bc4c470310c5c29cc37",
+    "bytes": 5188
+  },
+  "artifact": {
+    "path": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\runtime-architecture.html",
+    "sha256": "a226d442bf0ad39297a88a2054e38d86dcb539e4c2cd43f30854c5a1e57a6652",
+    "bytes": 775867
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\runtime-architecture.finalize.json",
+    "summaryReceipt": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\runtime-architecture.finalize-summary.json",
+    "browserCheckReceipt": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\runtime-architecture.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.0.1",
+    "availableVersion": "3.0.1",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-06T20:22:33.008Z",
+    "source": "network",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 1903,
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedBends": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "renderer-store",
+            "from": "renderer",
+            "to": "store",
+            "label": "post PNG",
+            "collectionIndex": 10,
+            "artifactIndex": 11
+          },
+          "bends": 3,
+          "stretch": 1
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "renderer → store needs 3 bends: move node renderer or store so they share a row or column with matching centers, or sit diagonally with a clear corner."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}

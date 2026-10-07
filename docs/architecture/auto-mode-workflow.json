@@ -1,0 +1,325 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Auto mode: a bounded agent loop",
+    "output": "docs/architecture/auto-mode-workflow.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "designer",
+      "label": "Designer"
+    },
+    {
+      "id": "control",
+      "label": "Auto run (code owns limits)"
+    },
+    {
+      "id": "agents",
+      "label": "Model judgements"
+    },
+    {
+      "id": "stages",
+      "label": "Child runs (manual mode's runs)"
+    }
+  ],
+  "phases": [
+    {
+      "id": "setup",
+      "label": "Plan + draft",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "rounds",
+      "label": "Rounds",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "finishing",
+      "label": "Compose + ship",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "groups": [
+    {
+      "id": "round_loop",
+      "label": "round_loop",
+      "lane": "stages",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "brief",
+    "plan",
+    "draft",
+    "samples",
+    "judge",
+    "decide",
+    "compose",
+    "check",
+    "finish",
+    "post"
+  ],
+  "nodes": [
+    {
+      "id": "brief",
+      "lane": "designer",
+      "col": 0,
+      "type": "external",
+      "label": "Brief + limits",
+      "sublabel": "rounds, budget, stop",
+      "width": 140
+    },
+    {
+      "id": "post",
+      "lane": "designer",
+      "col": 5,
+      "type": "frontend",
+      "label": "Finished post",
+      "sublabel": "+ decision trail",
+      "width": 140
+    },
+    {
+      "id": "plan",
+      "lane": "control",
+      "col": 0,
+      "type": "backend",
+      "label": "plan",
+      "sublabel": "save AutoSettings",
+      "width": 140
+    },
+    {
+      "id": "decide",
+      "lane": "control",
+      "col": 3,
+      "type": "security",
+      "label": "decide",
+      "sublabel": "score, rounds, budget",
+      "tag": "hard flag = no",
+      "width": 140
+    },
+    {
+      "id": "draft",
+      "lane": "stages",
+      "col": 1,
+      "type": "backend",
+      "label": "draft run",
+      "sublabel": "prompt writer",
+      "width": 140
+    },
+    {
+      "id": "samples",
+      "lane": "stages",
+      "col": 2,
+      "type": "backend",
+      "label": "samples run",
+      "sublabel": "N photos, critic, rank",
+      "width": 140
+    },
+    {
+      "id": "revise",
+      "lane": "stages",
+      "col": 3,
+      "type": "backend",
+      "label": "revise_prompt run",
+      "sublabel": "critic's changes",
+      "width": 140
+    },
+    {
+      "id": "compose",
+      "lane": "stages",
+      "col": 4,
+      "type": "backend",
+      "label": "compose run",
+      "sublabel": "best photo, 3 layouts",
+      "width": 140
+    },
+    {
+      "id": "finish",
+      "lane": "stages",
+      "col": 5,
+      "type": "backend",
+      "label": "finish run",
+      "sublabel": "save post",
+      "width": 140
+    },
+    {
+      "id": "judge",
+      "lane": "agents",
+      "col": 2,
+      "type": "messagebus",
+      "label": "judge",
+      "sublabel": "good enough? changes",
+      "width": 140
+    },
+    {
+      "id": "check",
+      "lane": "agents",
+      "col": 4,
+      "type": "messagebus",
+      "label": "final check",
+      "sublabel": "ship? score, flaw",
+      "width": 140
+    },
+    {
+      "id": "question",
+      "lane": "control",
+      "col": 1,
+      "type": "security",
+      "label": "Question back",
+      "sublabel": "unusable brief",
+      "width": 140
+    },
+    {
+      "id": "second",
+      "lane": "agents",
+      "col": 5,
+      "type": "messagebus",
+      "label": "Check 2nd layout",
+      "sublabel": "keep higher score",
+      "width": 140
+    }
+  ],
+  "edges": [
+    {
+      "id": "start-auto",
+      "from": "brief",
+      "to": "plan",
+      "label": "start",
+      "variant": "emphasis"
+    },
+    {
+      "id": "plan-draft",
+      "from": "plan",
+      "to": "draft",
+      "variant": "emphasis",
+      "toSide": "left",
+      "fromSide": "bottom"
+    },
+    {
+      "id": "draft-samples",
+      "from": "draft",
+      "to": "samples",
+      "variant": "emphasis"
+    },
+    {
+      "id": "samples-judge",
+      "from": "samples",
+      "to": "judge",
+      "label": "scored round",
+      "variant": "emphasis"
+    },
+    {
+      "id": "judge-decide",
+      "from": "judge",
+      "to": "decide",
+      "label": "verdict",
+      "variant": "emphasis"
+    },
+    {
+      "id": "decide-revise",
+      "from": "decide",
+      "to": "revise",
+      "label": "continue",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "revise-samples",
+      "from": "revise",
+      "to": "samples",
+      "label": "next round",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "id": "decide-compose",
+      "from": "decide",
+      "to": "compose",
+      "label": "stop",
+      "variant": "emphasis"
+    },
+    {
+      "id": "compose-check",
+      "from": "compose",
+      "to": "check",
+      "variant": "emphasis"
+    },
+    {
+      "id": "check-finish",
+      "from": "check",
+      "to": "finish",
+      "label": "ship",
+      "variant": "emphasis"
+    },
+    {
+      "id": "finish-post",
+      "from": "finish",
+      "to": "post",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "right",
+      "route": "outside-right",
+      "role": "return"
+    },
+    {
+      "id": "draft-question",
+      "from": "draft",
+      "to": "question",
+      "label": "needs brief",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "check-second",
+      "from": "check",
+      "to": "second",
+      "label": "no ship",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "second-finish",
+      "from": "second",
+      "to": "finish",
+      "variant": "dashed",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Code owns",
+      "items": [
+        "Rounds limit, photo budget and stop score (defaults 3, 6, 4.2)",
+        "A top sample with a hard flag or under the stop score is never good enough",
+        "The order the layouts are checked in"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "The model owns",
+      "items": [
+        "Whether a round is good enough, and what the prompt should change",
+        "Whether the finished post would ship, and its biggest flaw"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Failure and stop",
+      "items": [
+        "A judge failure ends the loop and composes the best photo so far",
+        "A failed round after an earlier photo composes the best photo; no photo at all fails the run",
+        "Stop or a restart hands the session back to manual mode with everything made so far"
+      ]
+    }
+  ]
+}

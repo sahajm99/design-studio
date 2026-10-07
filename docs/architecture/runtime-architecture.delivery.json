@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "c6443185-0d64-4bf5-adab-ac458fbb6f16",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\runtime-architecture.json",
+  "output": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\runtime-architecture.html",
+  "specification": {
+    "sha256": "7b7dc52057c78332cb3b26aa945a60dfeaeb2ec10d761bc4c470310c5c29cc37",
+    "bytes": 5188
+  },
+  "artifact": {
+    "sha256": "a226d442bf0ad39297a88a2054e38d86dcb539e4c2cd43f30854c5a1e57a6652",
+    "bytes": 775867
+  }
+}

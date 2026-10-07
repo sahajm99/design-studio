@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Design Studio runtime architecture",
+    "output": "docs/architecture/runtime-architecture.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    { "id": "designer", "type": "external", "label": "Designer", "sublabel": "browser", "pos": [40, 300], "size": [150, 64] },
+    { "id": "web", "type": "frontend", "label": "Web UI", "sublabel": "FastAPI + Jinja pages", "pos": [310, 300], "size": [150, 64] },
+    { "id": "jobs", "type": "backend", "label": "Run jobs", "sublabel": "asyncio background tasks", "pos": [580, 300], "size": [150, 64], "tag": "Stop cancels" },
+    { "id": "workflows", "type": "backend", "label": "ADK workflows", "sublabel": "fixed-edge Workflow graphs", "pos": [850, 240], "size": [170, 180], "tag": "auto = bounded loop" },
+    { "id": "agents", "type": "backend", "label": "LLM agents", "sublabel": "writer, critic, judge, checker", "pos": [850, 80], "size": [170, 80], "tag": "single-turn JSON" },
+    { "id": "gateway", "type": "backend", "label": "Model gateway", "sublabel": "Gemini or FakeLlm", "pos": [1140, 88], "size": [150, 64] },
+    { "id": "gemini", "type": "cloud", "label": "Gemini API", "sublabel": "Flash-Lite, free tier", "pos": [1410, 88], "size": [160, 64] },
+    { "id": "photos", "type": "backend", "label": "Photo providers", "sublabel": "Cloudflare or fake", "pos": [1140, 240], "size": [150, 64] },
+    { "id": "workersai", "type": "cloud", "label": "Workers AI", "sublabel": "Cloudflare, FLUX.2 klein", "pos": [1410, 240], "size": [160, 64] },
+    { "id": "renderer", "type": "backend", "label": "Renderer", "sublabel": "Playwright Chromium", "pos": [1140, 356], "size": [150, 64], "tag": "contrast shade" },
+    { "id": "store", "type": "database", "label": "SQLite + data/", "sublabel": "runs, sessions, PNGs", "pos": [850, 500], "size": [170, 64] },
+    { "id": "library", "type": "backend", "label": "Library", "sublabel": "board import, analysis job", "pos": [310, 500], "size": [150, 64] },
+    { "id": "hosts", "type": "external", "label": "Image hosts", "sublabel": "inspiration-board links", "pos": [40, 500], "size": [150, 64] },
+    { "id": "kit", "type": "database", "label": "Brand kit folder", "sublabel": "brand.yaml, logo, fonts", "pos": [580, 140], "size": [150, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "studio container (docker compose up)", "wraps": ["web", "jobs", "workflows", "agents", "gateway", "photos", "renderer", "store", "library", "kit"] }
+  ],
+  "connections": [
+    { "id": "designer-web", "from": "designer", "to": "web", "label": "HTTP :8000", "variant": "emphasis" },
+    { "id": "web-jobs", "from": "web", "to": "jobs", "label": "start run", "variant": "emphasis" },
+    { "id": "jobs-workflows", "from": "jobs", "to": "workflows", "label": "await run", "variant": "emphasis" },
+    { "id": "kit-workflows", "from": "kit", "to": "workflows", "label": "kit", "variant": "dashed" },
+    { "id": "workflows-agents", "from": "workflows", "to": "agents", "label": "context in", "fromSide": "top", "toSide": "bottom" },
+    { "id": "agents-gateway", "from": "agents", "to": "gateway", "label": "LlmRequest" },
+    { "id": "gateway-gemini", "from": "gateway", "to": "gemini", "label": "retry 429/5xx" },
+    { "id": "workflows-photos", "from": "workflows", "to": "photos", "label": "N prompts" },
+    { "id": "photos-workersai", "from": "photos", "to": "workersai", "label": "180 s timeout" },
+    { "id": "workflows-renderer", "from": "workflows", "to": "renderer", "label": "spec + photo" },
+    { "id": "renderer-store", "from": "renderer", "to": "store", "label": "post PNG", "fromSide": "bottom", "toSide": "right" },
+    { "id": "workflows-store", "from": "workflows", "to": "store", "label": "steps, samples", "fromSide": "bottom", "toSide": "top" },
+    { "id": "web-library", "from": "web", "to": "library", "label": "import, tick", "fromSide": "bottom", "toSide": "top" },
+    { "id": "library-store", "from": "library", "to": "store", "label": "references, style cards" },
+    { "id": "library-hosts", "from": "library", "to": "hosts", "label": "fetch images", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Who decides what happens next", "items": [
+      "Code fixes each run's step order; agents only return typed JSON",
+      "Manual mode: the designer's buttons start the next short run",
+      "Auto mode: code owns rounds, photo budget, stop score and hard flags; the judge says continue or stop and what to change"
+    ] },
+    { "dot": "rose", "title": "Failure paths", "items": [
+      "Gemini: HTTP retry on 429 and 5xx; a prompt draft that fails its contract is asked for once more",
+      "Cloudflare: 180 s timeout, one retry; one failed sample does not fail the round",
+      "Restart: running runs are marked interrupted and auto sessions return to manual"
+    ] },
+    { "dot": "amber", "title": "Demo mode and brands", "items": [
+      "No keys: FakeLlm and a fake photo provider run the same agent code; tests run offline",
+      "A brand is a folder; the renderer injects its colours, fonts and logo as CSS variables"
+    ] }
+  ]
+}

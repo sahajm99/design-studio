@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "58247903-a3ff-4be3-b404-e9a018d4efb7",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\auto-mode-workflow.json",
+  "output": "C:\\Users\\sahaj\\OneDrive\\Desktop\\Experiments\\projects\\active\\design-studio\\docs\\architecture\\auto-mode-workflow.html",
+  "specification": {
+    "sha256": "7cc8100cc67a12a5faaaa30cb00a9ceb18fde02b76752d4047cba0c5d323660b",
+    "bytes": 6801
+  },
+  "artifact": {
+    "sha256": "10aa416efc103fa94ec85c21eeed3336279d1ed9ccf6d731651417c72704c469",
+    "bytes": 768685
+  }
+}
