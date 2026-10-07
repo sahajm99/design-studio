@@ -87,6 +87,17 @@ The photo prompt is the one place the model is free. The prompt writer is told t
 colour for the mode, which third of the frame must stay plain for the words, and that the
 photograph never contains text, lettering or a logo, because the studio sets those afterwards.
 
+### The studio's own look
+
+The tool's chrome follows Hybridge's design system, the look of its own internal tools: ink
+on white surfaces over a porcelain canvas, the kit's typeface, headings in the brand's blue,
+glass for the navigation bar only, colour only where it means an outcome, light only, one
+primary action per view. The rules are re-expressed in the studio's own stylesheet rather than
+copied from another project, and the chrome reads its colours and typeface from the active
+kit, so the Hybridge kit yields the Hybridge look and another kit tints the tool its own way.
+The spec is `docs/superpowers/specs/2026-10-07-design-studio-ui-design.md`; a "How it works"
+page introducing the eight agents is the next page to be built on it.
+
 ## 5. Calls to models and services
 
 | Service | How | Why |

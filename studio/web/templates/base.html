@@ -1,43 +1,70 @@
+{%- import "icons.html" as icons -%}
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>{% block title %}Design Studio{% endblock %}</title>
-    <script>
-      // Set the saved theme before anything paints, so there is no flash of the
-      // wrong theme. With nothing saved, the CSS alone follows the system setting.
-      (function () {
-        try {
-          var saved = localStorage.getItem("theme");
-          if (saved === "dark" || saved === "light") {
-            document.documentElement.setAttribute("data-theme", saved);
-          }
-        } catch (error) {
-          /* localStorage can be unavailable; the system setting still applies. */
-        }
-      })();
-    </script>
+    {#- The chrome takes its colours and its face from the active kit, before the stylesheet,
+        which only holds the system's defaults and the status colours. The face is the kit's
+        own file, served by /brand/font, so no request leaves the machine for a font. #}
+    <style>
+      {%- if brand_font %}
+      @font-face {
+        font-family: "{{ brand_font }}";
+        src: url("/brand/font?style=regular");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+      {%- if brand_font_italic %}
+      @font-face {
+        font-family: "{{ brand_font }}";
+        src: url("/brand/font?style=italic");
+        font-weight: 100 900;
+        font-style: italic;
+        font-display: swap;
+      }
+      {%- endif %}
+      {%- endif %}
+      :root {
+        {%- for name, value in (chrome_tokens or {}).items() %}
+        {{ name }}: {{ value }};
+        {%- endfor %}
+        {%- if brand_font %}
+        --font-kit: "{{ brand_font }}";
+        {%- endif %}
+      }
+    </style>
     <link rel="stylesheet" href="/static/app.css" />
   </head>
-  <body>
-    <header class="top-bar">
-      <div class="top-bar-row">
-        <a class="wordmark" href="/studio">
-          <span class="wordmark-studio">Design Studio</span>
-          <span class="wordmark-brand">{{ brand_name }}</span>
+  {#- Each page names its section of the bar (active_page), its own name for the phone's bar
+      (page_name), and whether it needs the wide frame (wide_page). #}
+  {%- set nav = [
+    ("studio", "/studio", "Studio"),
+    ("library", "/library", "Library"),
+    ("archive", "/archive", "Archive"),
+    ("editor", "/editor", "Editor"),
+    ("runs", "/runs", "Runs"),
+  ] %}
+  <body class="app-canvas{{ ' is-wide' if wide_page else '' }}">
+    <header class="bar-slot">
+      <div class="bar" data-bar>
+        <div class="glass bar-glass" aria-hidden="true"></div>
+        <a class="bar-brand" href="/studio">
+          <img class="bar-logo" src="/brand/logo?mode=light" alt="" />
+          <span class="bar-rule" aria-hidden="true"></span>
+          <span class="bar-name">{{ brand_name }} Design Studio</span>
         </a>
-        <div class="top-bar-actions">
-          <nav class="top-nav" aria-label="Main">
-            <a href="/studio">Studio</a>
-            <a href="/library">Library</a>
-            <a href="/archive">Archive</a>
-            <a href="/editor">Editor</a>
-            <a href="/runs">Runs</a>
-          </nav>
-          <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch theme"></button>
-        </div>
+        {% if page_name %}<span class="bar-page" aria-hidden="true">{{ page_name }}</span>{% endif %}
+        <nav class="bar-nav" aria-label="Main">
+          {%- for key, href, label in nav %}
+          <a class="bar-item{{ ' glass-pill' if key == active_page else '' }}" href="{{ href }}"{% if key == active_page %} aria-current="page"{% endif %}>{{ icons.icon(key, 18) }}<span>{{ label }}</span></a>
+          {%- endfor %}
+        </nav>
       </div>
+    </header>
+    <main class="page">
       {% if demo_mode or not has_photo_source %}
       <div class="banner-stack">
         {% if demo_mode %}
@@ -48,8 +75,15 @@
         {% endif %}
       </div>
       {% endif %}
-    </header>
-    <main class="page">{% block content %}{% endblock %}</main>
+      {% block content %}{% endblock %}
+    </main>
+    <nav class="glass tab-bar" aria-label="Main">
+      <ul>
+        {%- for key, href, label in nav %}
+        <li><a class="tab-item{{ ' glass-pill' if key == active_page else '' }}" href="{{ href }}"{% if key == active_page %} aria-current="page"{% endif %}>{{ icons.icon(key, 20) }}<span>{{ label }}</span></a></li>
+        {%- endfor %}
+      </ul>
+    </nav>
     <script src="/static/app.js"></script>
   </body>
 </html>

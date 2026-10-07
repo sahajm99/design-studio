@@ -1,22 +1,29 @@
 {% extends "base.html" %}
+{% set active_page = "library" %}
+{% set page_name = "Library" %}
 {% block title %}Library · Design Studio{% endblock %}
 {% block content %}
+{% import "icons.html" as icons %}
+<header class="page-header">
+  <h1 class="page-title">Library<span class="page-title-tail">References, taste and the quality bar.</span></h1>
+</header>
+
 <section class="panel quality-bar-panel">
-  {#- The page's heading comes first; the quality bar is the first part of the page. #}
-  <h1>Reference library</h1>
   <h2>Quality bar</h2>
   {% if quality_bar_error %}
   <p class="field-error" role="alert">{{ quality_bar_error }}</p>
   {% endif %}
   <div class="quality-bar-row">
     {% if quality_bar.url %}
-    <img class="quality-bar-image" src="{{ quality_bar.url }}" alt="Quality bar" />
+    <div class="inset quality-bar-figure">
+      <img class="quality-bar-image" src="{{ quality_bar.url }}" alt="Quality bar" />
+    </div>
     {% endif %}
     <div class="quality-bar-body">
       {% if quality_bar.url %}
       <p class="quality-bar-explain">This image is the bar the critic holds every photo to.</p>
-      <p class="hint">It sets the finish the critic expects, not the subject or the style. Choose a post you would publish as this brand.</p>
-      <p class="quality-bar-origin">{{ quality_bar.line }}</p>
+      <p class="meta">It sets the finish the critic expects, not the subject or the style. Choose a post you would publish as this brand.</p>
+      {% if quality_bar.line %}<p class="meta meta-faint">{{ quality_bar.line }}</p>{% endif %}
       {% endif %}
       <form method="post" action="/quality-bar/upload" enctype="multipart/form-data" class="upload-form">
         <label for="quality-bar-image">Upload an image</label>
@@ -28,17 +35,22 @@
       </form>
       {% if quality_bar.is_designer %}
       <form method="post" action="/quality-bar/reset" class="inline-form">
-        <button type="submit" class="btn">Back to the kit's example</button>
+        <button type="submit" class="btn-link">Back to the kit's example</button>
       </form>
       {% endif %}
     </div>
   </div>
 </section>
 
-<section class="panel">
-  <p class="lede">Import some designs, then mark each one liked or not. The taste panel below updates as you go.</p>
+<section class="panel imports-panel">
+  <div class="section-head">
+    <div>
+      <h2 class="section-title">Add references</h2>
+      <p class="section-desc">Import some designs, then mark each one liked or not. The taste panel below updates as you go.</p>
+    </div>
+  </div>
 
-  <div class="import-actions">
+  <div class="actions import-actions">
     {% if has_board %}
     <form method="post" action="/library/import" class="inline-form">
       <input type="hidden" name="source" value="board" />
@@ -68,10 +80,10 @@
       <button type="submit" class="btn">Import the links</button>
     </form>
   </div>
-  <p class="hint library-note">Only add images you are allowed to use. A reference shapes the prompt; it is never copied into a post.</p>
+  <p class="meta library-note">Only add images you are allowed to use. A reference shapes the prompt; it is never copied into a post.</p>
 
   {% if import_summary %}
-  <div class="import-summary" role="status">
+  <div class="inset import-summary" role="status">
     <p>
       Added {{ import_summary.added }}, already in the library {{ import_summary.already_in_library }},
       duplicates {{ import_summary.duplicates }}, could not be fetched {{ import_summary.unavailable|length }}.
@@ -97,22 +109,26 @@
 
 <section class="panel taste-panel" data-taste-panel>
   <h2>Taste</h2>
+  <dl class="inset facts">
+    <div><dt>Liked</dt><dd class="tabular" data-taste-liked>{{ taste.liked_count }}</dd></div>
+    <div><dt>Disliked</dt><dd class="tabular" data-taste-disliked>{{ taste.disliked_count }}</dd></div>
+    <div>
+      <dt>Analysed</dt>
+      <dd class="tabular" data-analysis-progress data-running="{{ 'true' if progress.running else 'false' }}"><span data-analysed>{{ progress.analysed }}</span> of <span data-total>{{ progress.total }}</span></dd>
+    </div>
+  </dl>
   <p class="taste-summary" data-taste-summary>{{ taste.summary }}</p>
-  <p class="taste-counts">
-    <span data-taste-liked>{{ taste.liked_count }}</span> liked,
-    <span data-taste-disliked>{{ taste.disliked_count }}</span> disliked
-  </p>
-  <p class="analysis-progress" data-analysis-progress data-running="{{ 'true' if progress.running else 'false' }}">
-    Analysed <span data-analysed>{{ progress.analysed }}</span> of <span data-total>{{ progress.total }}</span>
-  </p>
 </section>
 
-<section class="panel">
-  <div class="filter-bar" role="group" aria-label="Filter references" data-filter-bar>
-    <button type="button" class="filter-btn is-active" data-filter="all">All</button>
-    <button type="button" class="filter-btn" data-filter="liked">Liked</button>
-    <button type="button" class="filter-btn" data-filter="disliked">Disliked</button>
-    <button type="button" class="filter-btn" data-filter="none">Not rated</button>
+<section class="panel references-panel">
+  <div class="section-head">
+    <h2 class="section-title">References</h2>
+    <div class="filter-bar" role="group" aria-label="Filter references" data-filter-bar>
+      <button type="button" class="filter-btn is-active" data-filter="all">All</button>
+      <button type="button" class="filter-btn" data-filter="liked">Liked</button>
+      <button type="button" class="filter-btn" data-filter="disliked">Disliked</button>
+      <button type="button" class="filter-btn" data-filter="none">Not rated</button>
+    </div>
   </div>
 
   {% if references %}
@@ -138,20 +154,25 @@
           data-choice="liked"
           aria-pressed="{{ 'true' if reference.choice == 'liked' else 'false' }}"
           aria-label="Like this reference"
-        >&#10003;</button>
+          title="Like"
+        >{{ icons.icon("check", 16) }}</button>
         <button
           type="button"
           class="choice-btn choice-dislike"
           data-choice="disliked"
           aria-pressed="{{ 'true' if reference.choice == 'disliked' else 'false' }}"
           aria-label="Dislike this reference"
-        >&#10005;</button>
+          title="Dislike"
+        >{{ icons.icon("cross", 16) }}</button>
       </div>
     </article>
     {% endfor %}
   </div>
   {% else %}
-  <p class="empty">No references yet. Import the board or the inbox folder above.</p>
+  <div class="empty">
+    <p class="empty-title">No references yet</p>
+    <p class="empty-detail">Import the board or the inbox folder above.</p>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

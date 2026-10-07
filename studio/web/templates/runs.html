@@ -1,24 +1,46 @@
 {% extends "base.html" %}
+{% set active_page = "runs" %}
+{% set page_name = "Runs" %}
 {% block title %}Runs · Design Studio{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>Runs</h1>
-  {% if rows %}
-  <ul class="run-list">
-    {% for row in rows %}
-    <li class="run-row">
-      <a class="run-link" href="/runs/{{ row.run.id }}">{{ row.run.brief or row.run.comment or "Untitled run" }}</a>
-      <span class="run-row-meta">
-        <span class="status-pill status-{{ row.run.status }}">{{ row.run.status }}</span>
-        <span>{{ row.kind_label }}</span>
-        {% if row.run.session_id %}<a href="/sessions/{{ row.run.session_id }}">Session</a>{% endif %}
-        <time>{{ row.run.created_at.strftime("%Y-%m-%d %H:%M") }}</time>
-      </span>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="empty">No runs yet. Write a brief on the Studio page to start one.</p>
-  {% endif %}
+<header class="page-header">
+  <h1 class="page-title">Runs<span class="page-title-tail">Every run, every step.</span></h1>
+</header>
+
+{% if rows %}
+<section class="panel is-flush">
+  <table class="data-table runs-table">
+    <thead>
+      <tr>
+        <th scope="col">Kind</th>
+        <th scope="col">Brief</th>
+        <th scope="col">Status</th>
+        <th scope="col" class="num">Started</th>
+        <th scope="col" class="num">Took</th>
+        <th scope="col"><span class="sr-only">Session</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      {#- A stage of an automatic session sits under the run it belongs to. #}
+      <tr{% if row.child %} class="is-child"{% endif %}>
+        <td class="cell-kind">{{ row.kind_label }}</td>
+        <td class="cell-brief"><a class="run-link" href="/runs/{{ row.run.id }}">{{ row.run.brief or row.run.comment or "Untitled run" }}</a></td>
+        <td class="cell-status"><span class="status-pill status-{{ row.run.status }}">{{ row.run.status }}</span></td>
+        <td class="num cell-started"><time>{{ row.run.created_at.strftime("%Y-%m-%d %H:%M") }}</time></td>
+        <td class="num cell-took">{% if row.took %}{{ row.took }}{% else %}<span class="missing">·</span>{% endif %}</td>
+        <td class="cell-session">{% if row.run.session_id %}<a href="/sessions/{{ row.run.session_id }}">Session</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </section>
+{% else %}
+<section class="panel">
+  <div class="empty">
+    <p class="empty-title">No runs yet</p>
+    <p class="empty-detail">Write a brief on the Studio page to start one.</p>
+  </div>
+</section>
+{% endif %}
 {% endblock %}

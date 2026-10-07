@@ -26,6 +26,7 @@ from studio.brand import logo_for_mode
 from studio.contracts import (
     AutoSettings,
     AutoState,
+    BrandKit,
     Choice,
     Composition,
     CustomLayout,
@@ -275,14 +276,39 @@ class EditorPreviewBody(BaseModel):
 
 # ------------------------------------------------------------------- helpers
 
+# The studio's own pages take these colours from the active kit (the kit's colour name, the
+# CSS variable, the design system's value for a kit that lacks the name). The status colours
+# are the stylesheet's own, so an outcome reads the same whatever the kit.
+_CHROME_TOKENS: tuple[tuple[str, str, str], ...] = (
+    ("heading_blue", "--heading", "#0F4B7B"),
+    ("ink", "--ink", "#18181B"),
+    ("ink_soft", "--ink-soft", "#52525B"),
+    ("ink_faint", "--ink-faint", "#A1A1AA"),
+    ("line", "--ink-line", "#E4E4E7"),
+    ("wash", "--ink-wash", "#F4F4F5"),
+    ("porcelain", "--canvas", "#F3F4F7"),
+    ("white", "--white", "#FFFFFF"),
+)
+
+
+def chrome_tokens(kit: BrandKit) -> dict[str, str]:
+    """The chrome's CSS variables from the kit's colours, with the system's value for any
+    colour the kit does not name. The base template writes them on :root."""
+    palette = {colour.name: colour.hex for colour in kit.colours}
+    return {variable: palette.get(name, default) for name, variable, default in _CHROME_TOKENS}
+
 
 def _base_context(request: Request) -> dict[str, Any]:
-    """The header and banner values every page template needs."""
+    """The bar, banner, colour and type values every page template needs."""
     deps: Deps = request.app.state.deps
     return {
         "brand_name": deps.kit.name,
         "demo_mode": deps.settings.demo_mode,
         "has_photo_source": deps.photo_provider is not None,
+        "chrome_tokens": chrome_tokens(deps.kit),
+        # The kit's family, served by /brand/font; its italic file is optional.
+        "brand_font": deps.kit.typography.family,
+        "brand_font_italic": deps.kit.typography.italic_file is not None,
     }
 
 
@@ -372,7 +398,7 @@ def _child_note(store: Store, run: Run | None) -> str:
     auto run or its newest stage is not running.
 
     It names the stage and its latest step, with the step's note when it has one, for
-    example "Making samples: Make the samples — 1 of 2 made…". Before the stage's first
+    example "Making samples: Make the samples · 1 of 2 made…". Before the stage's first
     step, it names the stage alone.
     """
     if run is None or run.kind != "auto":
@@ -386,7 +412,7 @@ def _child_note(store: Store, run: Run | None) -> str:
     if not events:
         return kind_label
     step = events[-1]
-    note = f" — {step.note}" if step.note else ""
+    note = f" · {step.note}" if step.note else ""
     return f"{kind_label}: {_step_label(stage.kind, step.step)}{note}"
 
 
@@ -438,9 +464,41 @@ def _step_rows(events: list[RunEvent], kind: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _took_text(run: Run) -> str:
+    """How long the run took, "48.2s" or "5m 12s", or "" while it is still going."""
+    if run.finished_at is None:
+        return ""
+    seconds = max(0.0, (run.finished_at - run.created_at).total_seconds())
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, rest = divmod(round(seconds), 60)
+    return f"{minutes}m {rest:02d}s"
+
+
 def _run_rows(runs: list[Run]) -> list[dict[str, Any]]:
-    """One row per run, with its kind in plain words, for the runs list."""
-    return [{"run": run, "kind_label": _RUN_KIND_LABELS.get(run.kind, run.kind)} for run in runs]
+    """One row per run, with its kind in plain words and how long it took, for the runs table.
+
+    A stage of an automatic session follows the run it belongs to, oldest first, marked as a
+    child; a stage whose run is not in the list keeps its own place.
+    """
+    listed = {run.id for run in runs}
+    stages: dict[str, list[Run]] = {}
+    for run in runs:
+        if run.parent_run_id in listed:
+            stages.setdefault(run.parent_run_id, []).append(run)
+
+    def row(run: Run, *, child: bool) -> dict[str, Any]:
+        kind_label = _RUN_KIND_LABELS.get(run.kind, run.kind)
+        return {"run": run, "kind_label": kind_label, "took": _took_text(run), "child": child}
+
+    rows = []
+    for run in runs:
+        if run.parent_run_id in listed:
+            continue
+        rows.append(row(run, child=False))
+        own = sorted(stages.get(run.id, []), key=lambda stage: stage.created_at)
+        rows.extend(row(stage, child=True) for stage in own)
+    return rows
 
 
 def _child_rows(store: Store, run_id: str) -> list[dict[str, Any]]:
@@ -879,6 +937,7 @@ def _research_view(
         "status": research.status,
         "status_line": _research_status_line(research, has_directions=has_directions),
         "text": research.text.strip(),
+        "queries": [query.strip() for query in research.queries if query.strip()],
         "sources": [
             {
                 "number": source.number,

@@ -1,8 +1,9 @@
 // Design Studio: small, page-specific behaviour. No build step, no framework.
 // Every page works from its server-rendered HTML alone; this file only adds
-// the live-updating touches (the library's choices and progress line, the
-// Studio form's auto limits and "Research first", the run and session pages'
-// polling, the session page's directions, the post page's copy button).
+// the live-updating touches (the bar condensing as the page scrolls, the
+// library's choices and progress line, the Studio form's auto limits and
+// "Research first", the run and session pages' polling, the session page's
+// directions, the post page's copy button).
 (() => {
   "use strict";
 
@@ -75,35 +76,16 @@
     return text;
   }
 
-  // -------------------------------------------------------------------- theme
+  // ---------------------------------------------------------------------- bar
 
-  function currentTheme() {
-    const attr = document.documentElement.getAttribute("data-theme");
-    if (attr === "dark" || attr === "light") return attr;
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  }
-
-  function updateThemeToggle(button, theme) {
-    const next = theme === "dark" ? "light" : "dark";
-    button.textContent = theme === "dark" ? "☀" : "☾";
-    button.setAttribute("aria-label", `Switch to the ${next} theme`);
-  }
-
-  function initTheme() {
-    const button = document.querySelector("[data-theme-toggle]");
-    if (!button) return;
-    updateThemeToggle(button, currentTheme());
-
-    button.addEventListener("click", () => {
-      const next = currentTheme() === "dark" ? "light" : "dark";
-      document.documentElement.setAttribute("data-theme", next);
-      try {
-        localStorage.setItem("theme", next);
-      } catch {
-        /* the choice just won't survive a reload */
-      }
-      updateThemeToggle(button, next);
-    });
+  // Past 8px of scroll the bar condenses from 60px to 52px; its slot keeps its height,
+  // so the page never jumps.
+  function initBar() {
+    const bar = document.querySelector("[data-bar]");
+    if (!bar) return;
+    const sync = () => bar.classList.toggle("is-condensed", window.scrollY > 8);
+    window.addEventListener("scroll", sync, { passive: true });
+    sync();
   }
 
   // ---------------------------------------------------------- studio page
@@ -462,8 +444,8 @@
       if (!response.ok) continue;
       const data = await response.json();
       // The run's latest step, then, during an auto run, what its stage in flight is doing.
-      const note = [data.step_note, data.child_note].filter(Boolean).join(" — ");
-      setText(document.querySelector("[data-status-note]"), note ? ` — ${note}` : "");
+      const note = [data.step_note, data.child_note].filter(Boolean).join(" · ");
+      setText(document.querySelector("[data-status-note]"), note ? ` · ${note}` : "");
       if (data.auto_status) setText(document.querySelector("[data-status-text]"), data.auto_status);
       renderAutoDecisions(data.auto_state);
       const progress = sessionProgress(data);
@@ -633,7 +615,7 @@
     });
   }
 
-  initTheme();
+  initBar();
   initStudioPage();
   initLibrary();
   initRunPage();

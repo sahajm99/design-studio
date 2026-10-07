@@ -129,6 +129,8 @@ NO_LAYOUT = "No layout could be rendered."
 LAYOUTS_READY = "{layouts} ready."
 CHECK_SKIPPED = "Final check skipped: {reason}."
 FINAL_CHECK = "Final check: picked {layout} ({score} of 5). Biggest flaw: {flaw}"
+# The flaw the line names when the critic named none.
+NO_FLAW_NAMED = "none named"
 WOULD_NOT_SHIP = (
     "Final check: picked {layout} ({score} of 5), would not ship as it is. Biggest flaw: {flaw}"
 )
@@ -144,7 +146,8 @@ JUDGE_THIS_ROUND = "Judge this round."
 POST_NUMBER = "Post {number}"
 # The critic's line on each post it compared, after the decision line in the step's note.
 POST_REASON = "Post {number}: {reason}"
-NOTE_SEPARATOR = " — "
+# Every piece of the final check's note is a sentence, so one space joins them.
+NOTE_SEPARATOR = " "
 
 
 # ------------------------------------------------------------------------- run
@@ -690,7 +693,9 @@ async def _final_check(
     candidates: list[LayoutCandidate],
 ) -> tuple[LayoutCandidate, str]:
     """The layout to finish, and the step's note: the decision line, which is also saved,
-    then the critic's line on each post, `Post {n}: {reason}`, separated by " — ".
+    then the critic's line on each post, `Post {n}: {reason}`. Each is a sentence ending in
+    a full stop (or its own `!` or `?`), joined by a space; a flaw the critic left blank
+    reads "none named".
 
     The critic compares every layout of the compose run at once (at most three) and picks the
     one to ship; the session's auto state keeps its review and the picked layout's caption.
@@ -710,10 +715,11 @@ async def _final_check(
     chosen = shown[review.pick - 1]
     layout = describe(chosen.composition)
     template = FINAL_CHECK if review.ship else WOULD_NOT_SHIP
-    line = template.format(layout=layout, score=review.score, flaw=review.biggest_flaw.strip())
+    flaw = review.biggest_flaw.strip() or NO_FLAW_NAMED
+    line = _sentence(template.format(layout=layout, score=review.score, flaw=flaw))
     _record(store, session, line, final_review=review, picked_layout=layout)
     reasons = [
-        POST_REASON.format(number=number, reason=reason.strip())
+        _sentence(POST_REASON.format(number=number, reason=reason.strip()))
         for number, reason in enumerate(review.reasons, start=1)
         if reason.strip()
     ]
@@ -843,6 +849,13 @@ def _without_text_asks(lines: list[str]) -> list[str]:
 def _clause(text: str) -> str:
     """A sentence set inside another one: trimmed, without its closing full stop."""
     return text.strip().rstrip(".")
+
+
+def _sentence(text: str) -> str:
+    """The text as a sentence of its own: trimmed, and ending with a full stop unless it
+    already ends with a full stop, an exclamation mark or a question mark."""
+    trimmed = text.strip()
+    return trimmed if trimmed.endswith((".", "!", "?")) else f"{trimmed}."
 
 
 def _hard_flag(review: SampleReview) -> str:

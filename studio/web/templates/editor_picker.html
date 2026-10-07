@@ -1,13 +1,19 @@
 {% extends "base.html" %}
+{% set active_page = "editor" %}
+{% set page_name = "Editor" %}
 {% block title %}Editor · Design Studio{% endblock %}
 {% block content %}
+<header class="page-header">
+  <h1 class="page-title">Editor</h1>
+</header>
+
+{% if error %}
+<p class="field-error" role="alert">{{ error }}</p>
+{% endif %}
+
 <section class="panel">
-  <h1>Editor</h1>
-  {% if error %}
-  <p class="field-error" role="alert">{{ error }}</p>
-  {% endif %}
+  <h2>Start from an upload</h2>
   <form method="post" action="/editor/start" enctype="multipart/form-data" class="upload-form">
-    <h2>Start from an upload</h2>
     <label class="sr-only" for="editor-photo">Upload a photo</label>
     <div class="upload-row">
       <input type="file" id="editor-photo" name="photo" accept="image/png,image/jpeg" required />
@@ -37,7 +43,10 @@
     {% endfor %}
   </div>
   {% else %}
-  <p class="empty">No posts with a photo yet.</p>
+  <div class="empty">
+    <p class="empty-title">No posts with a photo yet</p>
+    <p class="empty-detail">Finish a session to edit its post here, or start from an upload above.</p>
+  </div>
   {% endif %}
 </section>
 
@@ -61,7 +70,10 @@
     {% endfor %}
   </div>
   {% else %}
-  <p class="empty">No photos yet.</p>
+  <div class="empty">
+    <p class="empty-title">No photos yet</p>
+    <p class="empty-detail">Photos a session makes or you upload show here.</p>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

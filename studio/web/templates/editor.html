@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% set active_page = "editor" %}
+{% set page_name = "Editor" %}
+{% set wide_page = true %}
 {% block title %}Editor · Design Studio{% endblock %}
 {% block content %}
 {#- A row of colour choices: the brand's own colour for the role first, then the palette. #}
@@ -23,13 +26,13 @@
 </fieldset>
 {%- endmacro %}
 
-<section class="panel editor-intro">
-  <h1>Editor</h1>
-  <p class="hint">Drag a block to move it, or drag its edges and corners to resize it. Click the photo to move or resize it and to see its settings.</p>
-</section>
+<header class="page-header">
+  <h1 class="page-title">Editor</h1>
+  <p class="page-lede">Drag a block to move it, or drag its edges and corners to resize it. Click the photo to move or resize it and to see its settings.</p>
+</header>
 
 <div class="editor" data-editor>
-  <div class="editor-stage">
+  <div class="panel editor-stage">
     <div class="editor-canvas" data-editor-canvas>
       <div class="editor-photo-box" data-editor-photo-box>
         <img class="editor-photo" data-editor-photo src="/media/{{ sample.image_path }}" alt="" draggable="false" />
@@ -50,17 +53,21 @@
 
   <div class="panel editor-panel">
     <div class="editor-words">
-      <label for="editor-headline">Headline</label>
-      <input type="text" id="editor-headline" name="headline" value="{{ headline }}" data-editor-word="headline" />
-      <label for="editor-subline">Subline</label>
-      <input type="text" id="editor-subline" name="subline" value="{{ subline }}" data-editor-word="subline" />
+      <div class="field">
+        <label for="editor-headline">Headline</label>
+        <input type="text" id="editor-headline" name="headline" value="{{ headline }}" data-editor-word="headline" />
+      </div>
+      <div class="field">
+        <label for="editor-subline">Subline</label>
+        <input type="text" id="editor-subline" name="subline" value="{{ subline }}" data-editor-word="subline" />
+      </div>
     </div>
 
     <div class="editor-group">
-      <h2 data-editor-block-name hidden></h2>
+      <h2 class="section-title" data-editor-block-name hidden></h2>
       <p class="hint" data-editor-no-block>Choose a block on the canvas.</p>
       <div class="editor-part" data-editor-for="text" hidden>
-        <div>
+        <div class="field">
           <label for="editor-font">Font</label>
           <select id="editor-font" data-editor-font>
             {%- for face in editor_data.faces %}
@@ -68,7 +75,7 @@
             {%- endfor %}
           </select>
         </div>
-        <div>
+        <div class="field">
           <label for="editor-weight">Weight</label>
           <select id="editor-weight" data-editor-weight>
             <option value="0">Brand default</option>
@@ -87,7 +94,7 @@
           <label class="editor-toggle"><input type="checkbox" data-editor-italic /><span>Italic</span></label>
           <p class="hint" data-editor-no-italic hidden>No italic for this face</p>
         </div>
-        <div>
+        <div class="field">
           <label for="editor-size">Size</label>
           <div class="editor-number">
             <input type="number" id="editor-size" min="12" max="400" step="1" data-editor-size />
@@ -96,25 +103,29 @@
         </div>
         <fieldset class="pill-group">
           <legend>Alignment</legend>
-          <label class="pill-option"><input type="radio" name="align" value="left" /><span>Left</span></label>
-          <label class="pill-option"><input type="radio" name="align" value="centre" /><span>Centre</span></label>
+          <span class="segmented">
+            <label class="pill-option"><input type="radio" name="align" value="left" /><span>Left</span></label>
+            <label class="pill-option"><input type="radio" name="align" value="centre" /><span>Centre</span></label>
+          </span>
         </fieldset>
       </div>
       <div class="editor-part" data-editor-for="text shade" hidden>
         {{ swatches("colour", "Colour", palette) }}
       </div>
       <div class="editor-part" data-editor-for="shade" hidden>
-        <div>
+        <div class="field">
           <label for="editor-opacity">Opacity</label>
           <input type="range" id="editor-opacity" min="0" max="1" step="0.05" data-editor-opacity />
         </div>
-        <button type="button" class="btn" data-editor-remove-shade>Remove the shade</button>
+        <button type="button" class="btn btn-small" data-editor-remove-shade>Remove the shade</button>
       </div>
       <div class="editor-part" data-editor-for="photo" hidden>
         <fieldset class="pill-group">
           <legend>Fit</legend>
-          <label class="pill-option"><input type="radio" name="photo_fit" value="cover" /><span>Cover</span></label>
-          <label class="pill-option"><input type="radio" name="photo_fit" value="contain" /><span>Contain</span></label>
+          <span class="segmented">
+            <label class="pill-option"><input type="radio" name="photo_fit" value="cover" /><span>Cover</span></label>
+            <label class="pill-option"><input type="radio" name="photo_fit" value="contain" /><span>Contain</span></label>
+          </span>
         </fieldset>
         <div class="pan-pad" role="group" aria-label="Move the photo">
           <button type="button" class="btn" data-pan="up" aria-label="Move the photo up">&uarr;</button>
@@ -122,22 +133,24 @@
           <button type="button" class="btn" data-pan="right" aria-label="Move the photo right">&rarr;</button>
           <button type="button" class="btn" data-pan="down" aria-label="Move the photo down">&darr;</button>
         </div>
-        <button type="button" class="btn" data-editor-fill>Fill the canvas</button>
+        <button type="button" class="btn btn-small" data-editor-fill>Fill the canvas</button>
         {{ swatches("background", "Background colour", palette) }}
       </div>
     </div>
 
     <div class="editor-group">
-      <button type="button" class="btn" data-editor-add-shade>Add a shade</button>
+      <button type="button" class="btn btn-small" data-editor-add-shade>Add a shade</button>
     </div>
 
     <div class="editor-group">
       <fieldset class="pill-group">
         <legend>Post mode</legend>
-        <label class="pill-option"><input type="radio" name="mode" value="dark" {{ "checked" if mode == "dark" else "" }} /><span>Dark</span></label>
-        <label class="pill-option"><input type="radio" name="mode" value="light" {{ "checked" if mode == "light" else "" }} /><span>Light</span></label>
+        <span class="segmented">
+          <label class="pill-option"><input type="radio" name="mode" value="dark" {{ "checked" if mode == "dark" else "" }} /><span>Dark</span></label>
+          <label class="pill-option"><input type="radio" name="mode" value="light" {{ "checked" if mode == "light" else "" }} /><span>Light</span></label>
+        </span>
       </fieldset>
-      <div>
+      <div class="field">
         <label for="editor-logo-width">Logo width</label>
         <div class="editor-number">
           <input type="number" id="editor-logo-width" min="14" max="92" step="1" data-editor-logo-width />
@@ -148,12 +161,12 @@
   </div>
 
   <div class="editor-actions">
-    <div class="editor-buttons">
-      <button type="button" class="btn" data-editor-preview-button>Preview</button>
+    <div class="actions editor-buttons">
+      <button type="button" class="btn btn-primary" data-editor-preview-button>Preview</button>
       <form method="post" class="inline-form" data-editor-finish>
-        <button type="submit" class="btn btn-primary" data-editor-finish-button disabled>Use this layout</button>
+        <button type="submit" class="btn" data-editor-finish-button disabled>Use this layout</button>
       </form>
-      <a class="btn" href="/sessions/{{ session.id }}">Back to the session</a>
+      <a class="btn-link" href="/sessions/{{ session.id }}">Back to the session</a>
     </div>
     <p class="hint" data-editor-stale hidden>Preview again to use this layout.</p>
     <p class="hint editor-status" role="status" data-editor-status></p>

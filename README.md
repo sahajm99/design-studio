@@ -117,6 +117,15 @@ their parent. When something goes wrong, this page says where.
 
 ![An automatic run](docs/screenshots/07-run.png)
 
+## The studio's own look
+
+The studio's pages follow Hybridge's design system: ink on white surfaces over a porcelain
+canvas, the kit's typeface, headings in the brand's blue, one glass bar, colour only where it
+means an outcome, light only. The chrome takes its colours and its typeface from the active
+kit, so another kit tints the tool its own way. The rules are written down in
+[docs/superpowers/specs/2026-10-07-design-studio-ui-design.md](docs/superpowers/specs/2026-10-07-design-studio-ui-design.md),
+and new pages follow them.
+
 ## Another brand
 
 Add a folder under `brands/` and point `STUDIO_BRAND` at it in `.env`. No code changes.

@@ -1,47 +1,54 @@
 {% extends "base.html" %}
+{% set active_page = "runs" %}
+{% set page_name = "Run" %}
 {% block title %}Run · Design Studio{% endblock %}
 {% block content %}
-<section
-  class="panel"
+{% set brief = run.brief or run.comment %}
+<header
+  class="page-header"
   id="run-page"
   data-run-id="{{ run.id }}"
   data-run-kind="{{ run.kind }}"
   data-poll="{{ 'true' if run.status == 'running' else 'false' }}"
 >
-  <h1>{{ kind_label }}</h1>
-  <p class="run-brief">{{ run.brief or run.comment }}</p>
-  {% if run.session_id %}
-  <p class="hint"><a href="/sessions/{{ run.session_id }}">Back to the session</a></p>
+  <h1 class="page-title">{{ kind_label }}{% if brief %}<span class="page-title-tail is-clamped">{{ brief }}</span>{% endif %}</h1>
+  <p class="meta run-status">Status: <span class="status-pill status-{{ run.status }}" data-run-status-label>{{ run.status }}</span></p>
+  {% if run.session_id or run.parent_run_id %}
+  <div class="meta run-links">
+    {% if run.session_id %}<a href="/sessions/{{ run.session_id }}">Back to the session</a>{% endif %}
+    {% if run.parent_run_id %}<span>Part of an automatic session: <a href="/runs/{{ run.parent_run_id }}">see the whole run</a></span>{% endif %}
+  </div>
   {% endif %}
-  {% if run.parent_run_id %}
-  <p class="hint">Part of an automatic session: <a href="/runs/{{ run.parent_run_id }}">see the whole run</a></p>
-  {% endif %}
-  <p class="run-status">Status: <span class="status-pill status-{{ run.status }}" data-run-status-label>{{ run.status }}</span></p>
+</header>
 
-  <p class="hint" data-run-working {% if run.status != "running" %}hidden{% endif %}>Working through the steps…</p>
+<section class="panel run-panel">
+  <h2>Steps</h2>
+
+  <p class="meta run-working" data-run-working {% if run.status != "running" %}hidden{% endif %}><span class="live-dot" aria-hidden="true"></span>Working through the steps…</p>
 
   <p class="run-done" data-run-done {% if run.status != "succeeded" %}hidden{% endif %}>
     {% if run.post_id %}
     <a href="/posts/{{ run.post_id }}" data-run-post-link>See the post</a>
     {% elif run.session_id %}
     <a href="/sessions/{{ run.session_id }}" data-run-session-link>Open the session</a>
-    {% if last_step_note %}<span class="run-done-note"> — {{ last_step_note }}</span>{% endif %}
+    {% if last_step_note %}<span class="run-done-note"> · {{ last_step_note }}</span>{% endif %}
     {% else %}
     <span data-run-done-text>Done.</span>
     {% endif %}
   </p>
 
-  <div data-run-failed {% if run.status not in ("failed", "interrupted") %}hidden{% endif %}>
-    <p class="field-error" role="alert" data-run-error>{{ run.error or "" }}</p>
+  <div class="run-failed" data-run-failed {% if run.status not in ("failed", "interrupted") %}hidden{% endif %}>
+    <p class="run-error" role="alert" data-run-error>{{ run.error or "" }}</p>
     {% if run.kind == "revise" %}
     <form method="post" action="/posts/{{ run.parent_post_id }}/revise" class="inline-form">
       <input type="hidden" name="comment" value="{{ run.comment }}" />
-      <button type="submit" class="btn">Run again</button>
+      <button type="submit" class="btn btn-small">Run again</button>
     </form>
     {% endif %}
   </div>
 
-  <ol class="step-ticket" data-steps-body>
+  {#- One compact line per step; the newest is lifted. The script adds and updates rows. #}
+  <ol class="log step-ticket" data-steps-body>
     {% for row in steps %}
     <li class="step-row" data-step="{{ row.name }}">
       <span class="step-status-dot status-{{ row.status }}" aria-hidden="true"></span>
@@ -59,7 +66,7 @@
   </ol>
 
   <div class="child-runs" data-run-children {% if not children %}hidden{% endif %}>
-    <h2>Child runs</h2>
+    <h2 class="section-title">Child runs</h2>
     <ul class="run-list" data-run-children-list>
       {% for child in children %}
       <li class="run-row">
