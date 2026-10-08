@@ -8,10 +8,13 @@ words fit. Where the words sit over the photo, the renderer measures the photo
 behind them and adds a shade under them when they would be hard to read.
 
 The editor's custom layout is drawn as the designer placed it: its blocks arrive
-as inline places, sizes, colours and faces, and its photo in a box of its own,
-held inside the guardrails first. Nothing steps down and no shade is added; words
-that do not fit their box, a block past the margin, and words that may be hard to
-read over the photo are reported instead.
+as inline places, sizes, colours and faces, in the order of their list (a later
+block over an earlier one), and its photo in a box of its own, held inside the
+guardrails first. The designer's own text blocks are set like the headline, and
+image blocks and an uploaded logo come from the brand's uploads, loaded as files
+like the photo. Nothing steps down and no shade is added; words that do not fit
+their box, a block past the margin, and words that may be hard to read over the
+photo are reported instead.
 """
 
 from __future__ import annotations
@@ -51,6 +54,7 @@ from studio.render.custom import (
     SUBLINE_PX,
     apply_guardrails,
     resolve_colour,
+    upload_file,
 )
 from studio.render.faces import Face, face_named
 
@@ -182,11 +186,12 @@ FIT_SCRIPT = """
 """
 
 # Defines window.studioFit() for a custom layout, in the same shape as above. Each
-# text block is judged on its own: its words must not spill past its sides ("headline
-# box"), and its box must not pass the margin's far edges ("headline margin"), nor may
-# a logo's ("logo margin"). It also reports where the words are, each text block's
-# words on their own (`parts`, in page order), which blocks are shown and the box the
-# photo is drawn in, for the contrast check.
+# text block (the headline, the subline and the designer's own text blocks) is judged
+# on its own: its words must not spill past its sides ("headline box"), and its box
+# must not pass the margin's far edges ("headline margin"), nor may a logo's ("logo
+# margin"). It also reports where the words are, each text block's words on their own
+# (`parts`, in page order), which blocks are shown and the box the photo is drawn in,
+# for the contrast check.
 CUSTOM_FIT_SCRIPT = """
 (() => {
   // Where the words really are, which can be wider than their box.
@@ -197,6 +202,7 @@ CUSTOM_FIT_SCRIPT = """
   };
 
   const plain = (box) => ({ left: box.left, top: box.top, right: box.right, bottom: box.bottom });
+  const KINDS = ["headline", "subline", "text"];
 
   window.studioFit = () => {
     const overflow = [];
@@ -207,9 +213,9 @@ CUSTOM_FIT_SCRIPT = """
     const right = innerWidth * FAR_EDGE;
     const bottom = innerHeight * FAR_EDGE;
     const pastMargin = (box) => box.bottom > bottom + 1 || box.right > right + 1;
-    for (const part of document.querySelectorAll(".headline, .subline")) {
+    for (const part of document.querySelectorAll(".headline, .subline, .text")) {
       if (!part.textContent.trim()) continue;
-      const kind = part.classList.contains("headline") ? "headline" : "subline";
+      const kind = KINDS.find((name) => part.classList.contains(name));
       const block = part.getBoundingClientRect();
       const box = wordsBox(part);
       if (box.left < block.left - 1 || box.right > block.right + 1) {
@@ -243,7 +249,7 @@ CUSTOM_FIT_SCRIPT = """
 """.replace("FAR_EDGE", f"{(100 - MARGIN_PCT) / 100:g}")
 
 # Loads every face the page declares, in each style, and waits for them, then names
-# anything that failed to load.
+# anything that failed to load, once each: the font, the logo, an image block or the photo.
 READY_SCRIPT = """
 async () => {
   const faces = [...document.fonts];
@@ -255,7 +261,8 @@ async () => {
   }
   for (const image of document.images) {
     if (!image.complete || image.naturalWidth === 0) {
-      missing.push(image.classList.contains("logo") ? "logo" : "photo");
+      const kind = ["logo", "image"].find((name) => image.classList.contains(name)) || "photo";
+      if (!missing.includes(kind)) missing.push(kind);
     }
   }
   return missing;
@@ -273,9 +280,10 @@ RESIZE_SCRIPT = """
 _PART_COLOURS = {"headline": "headline", "subline": "body"}
 
 # A custom layout's block colours: which role a block takes when its colour is the brand's.
-_BLOCK_ROLES = {"headline": "headline", "subline": "body", "shade": "background"}
-# The page draws the shades over the photo, the words over them and the logo on top.
-_DRAWING_ORDER = {"shade": 0, "headline": 1, "subline": 1, "logo": 2}
+# The designer's own text block takes the body's.
+_BLOCK_ROLES = {"headline": "headline", "subline": "body", "text": "body", "shade": "background"}
+# The custom layout's blocks that hold words: each is fitted and checked for contrast.
+_TEXT_KINDS: tuple[str, ...] = ("headline", "subline", "text")
 
 _templates = Environment(
     loader=FileSystemLoader(LAYOUTS_DIR),
@@ -294,6 +302,7 @@ def build_html(
     italic_font_url: str | None,
     headline_px: int,
     scrim: bool = False,
+    uploads_root: Path | None = None,
 ) -> str:
     """The page for one post: its layout filled with the words, the brand's values and the composition.
 
@@ -301,17 +310,21 @@ def build_html(
     decides when a page needs it. A custom layout is drawn from its blocks, held
     inside the guardrails, with its own fit script; `scrim` does not apply to it.
     Its page also declares each further face its words are set in, and no other.
+    Its image blocks and an uploaded logo are files in the kit's folder of
+    `uploads_root`; without one, image blocks are left out and the logo is the kit's.
     """
     if spec.layout in NEEDS_PHOTO and photo_url is None:
         raise ValueError(_needs_photo(spec.layout))
     faces: list[Face] = []
     if spec.layout == "custom":
-        layout, _ = apply_guardrails(_custom_layout(spec), kit, spec.mode)
-        drawn = _drawn_blocks(layout, spec)
+        layout, _ = apply_guardrails(
+            _custom_layout(spec), kit, spec.mode, uploads_root=uploads_root
+        )
+        drawn = _drawn_blocks(layout, spec, kit, uploads_root)
         faces = _extra_faces(drawn, kit)
         layout_values = {
             "fit_script": Markup(CUSTOM_FIT_SCRIPT),
-            **_custom_page(layout, drawn, kit, spec.mode),
+            **_custom_page(layout, drawn, kit, spec.mode, uploads_root),
         }
     else:
         layout_values = {
@@ -396,8 +409,11 @@ class _Capture:
 class Renderer:
     """Renders posts with one shared headless Chromium. Each render gets its own page."""
 
-    def __init__(self, work_dir: Path) -> None:
+    def __init__(self, work_dir: Path, *, uploads_root: Path | None = None) -> None:
+        """`uploads_root` is the store's uploads folder, where a custom layout's image blocks
+        and an uploaded logo must be; without one they are not drawn."""
         self.work_dir = work_dir
+        self.uploads_root = uploads_root
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._lock = asyncio.Lock()
@@ -519,10 +535,17 @@ class Renderer:
         the text block hardest to read over what is drawn beneath it, or that the photo
         could not be measured.
         """
-        layout, adjustments = apply_guardrails(_custom_layout(spec), kit, spec.mode)
+        uploads_root = self.uploads_root
+        layout, adjustments = apply_guardrails(
+            _custom_layout(spec), kit, spec.mode, uploads_root=uploads_root
+        )
         start_px = START_PX["custom"]
         html = build_html(
-            spec, kit, headline_px=start_px, **self._page_files(kit, spec.mode, photo_path)
+            spec,
+            kit,
+            headline_px=start_px,
+            uploads_root=uploads_root,
+            **self._page_files(kit, spec.mode, photo_path),
         )
         capture = await self._capture(
             browser, html, kit.post_size, start_px, MIN_PX_FOR["custom"], out_path
@@ -537,7 +560,7 @@ class Renderer:
                 capture,
                 photo_path,
                 layout,
-                _drawn_blocks(layout, spec),
+                _drawn_blocks(layout, spec, kit, uploads_root),
                 kit,
                 spec.mode,
             )
@@ -660,7 +683,11 @@ def _custom_layout(spec: DesignSpec) -> CustomLayout:
 
 
 def _custom_page(
-    layout: CustomLayout, drawn: list[Block], kit: BrandKit, mode: Mode
+    layout: CustomLayout,
+    drawn: list[Block],
+    kit: BrandKit,
+    mode: Mode,
+    uploads_root: Path | None,
 ) -> dict[str, Any]:
     """What custom.html draws for a guarded layout: the blocks it draws (`drawn`, in drawing
     order), the photo in its box and the canvas colour.
@@ -671,7 +698,7 @@ def _custom_page(
     canvas = layout.background
     box = layout.photo
     return {
-        "blocks": [_block_style(block, kit, mode) for block in drawn],
+        "blocks": [_block_style(block, kit, mode, uploads_root) for block in drawn],
         "photo_fit": layout.photo_fit,
         "photo_offset_x": layout.photo_offset_x,
         "photo_offset_y": layout.photo_offset_y,
@@ -682,24 +709,40 @@ def _custom_page(
     }
 
 
-def _drawn_blocks(layout: CustomLayout, spec: DesignSpec) -> list[Block]:
-    """The guarded layout's blocks the page draws, in drawing order.
+def _drawn_blocks(
+    layout: CustomLayout, spec: DesignSpec, kit: BrandKit, uploads_root: Path | None
+) -> list[Block]:
+    """The guarded layout's blocks the page draws, in drawing order: the order of the list,
+    so a later block sits over an earlier one.
 
-    A text block whose words are empty is left out, as the other layouts leave out an
-    empty subline.
+    A headline or a subline whose words are empty is left out, as the other layouts leave
+    out an empty subline, and so is an image block whose file is not in the kit's folder of
+    `uploads_root` (every one, without an uploads folder).
     """
     texts = {"headline": spec.headline.strip(), "subline": spec.subline.strip()}
-    shown = [block for block in layout.blocks if block.kind not in texts or texts[block.kind]]
-    return sorted(shown, key=lambda block: _DRAWING_ORDER[block.kind])
+    return [
+        block
+        for block in layout.blocks
+        if (block.kind not in texts or texts[block.kind])
+        and (
+            block.kind != "image"
+            or _upload_url(block.image_path, uploads_root, kit.id) is not None
+        )
+    ]
 
 
-def _block_style(block: Block, kit: BrandKit, mode: Mode) -> dict[str, Any]:
+def _block_style(
+    block: Block, kit: BrandKit, mode: Mode, uploads_root: Path | None
+) -> dict[str, Any]:
     """One block as the page places it: its box in percent of the canvas, and how its words look.
 
     The words take the face the block names (the kit's family when it names none, as a
-    quoted CSS name), the block's weight or the role's, and italics when asked for.
+    quoted CSS name), the block's weight or the role's, and italics when asked for; a text
+    block's words are its own. `src` is the file an image block shows, or the upload a logo
+    shows instead of the kit's file; None for every other block and for the kit's logo.
     """
     role = _BLOCK_ROLES.get(block.kind)
+    uses_upload = block.kind in ("image", "logo")
     return {
         "kind": block.kind,
         "left": block.x,
@@ -713,7 +756,19 @@ def _block_style(block: Block, kit: BrandKit, mode: Mode) -> dict[str, Any]:
         "family": _css_string(_face_name(block, kit)),
         "weight": block.weight or _role_weight(block, kit),
         "italic": block.italic,
+        "text": block.text,
+        "fit": block.fit,
+        "src": _upload_url(block.image_path, uploads_root, kit.id) if uses_upload else None,
     }
+
+
+def _upload_url(image_path: str, uploads_root: Path | None, brand_id: str) -> str | None:
+    """An upload's media path as the page loads it, a file address like the photo's; None
+    when there is no uploads folder or the path names no file in the brand's folder of it."""
+    if uploads_root is None:
+        return None
+    path = upload_file(image_path, uploads_root, brand_id)
+    return _file_url(path) if path is not None else None
 
 
 def _face_name(block: Block, kit: BrandKit) -> str:
@@ -732,7 +787,7 @@ def _extra_faces(drawn: list[Block], kit: BrandKit) -> list[Face]:
     """The faces the drawn words are set in beside the kit's family, once each, in page order."""
     faces: list[Face] = []
     for block in drawn:
-        if block.kind not in ("headline", "subline"):
+        if block.kind not in _TEXT_KINDS:
             continue
         face = face_named(kit, block.font)
         if face is not None and face.name != kit.typography.family and face not in faces:
@@ -767,21 +822,24 @@ def _custom_contrast(
 ) -> tuple[float, str] | None:
     """The lowest WCAG contrast ratio among a custom layout's text blocks, with that block's kind.
 
-    Each text block is measured on its own: its own words over all the page draws under
-    them (the canvas colour, the photo where its box reaches, and every shade over both),
-    against its own colour. The page shows the text blocks of `drawn` in that order, as
-    `capture.parts` lists them. The photo is read once, and every block is measured from
-    that one image. None when the photo cannot be measured.
+    Each text block (the headline, the subline and every text block of the designer's) is
+    measured on its own: its own words over all the page draws under them (the canvas
+    colour, the photo where its box reaches, and every shade drawn before it in `drawn`,
+    over both), against its own colour. An image block under the words is not measured. The
+    page shows the text blocks of `drawn` in that order, as `capture.parts` lists them. The
+    photo is read once, and every block is measured from that one image. None when the
+    photo cannot be measured.
     """
     if capture.photo is None:
         return None
     image = _read_photo(photo_path)
     background = resolve_colour(layout.background, kit, mode, "background")
     position = _photo_position(layout)
-    shades = _custom_shades(layout, kit, mode, kit.post_size)
-    texts = [block for block in drawn if block.kind in ("headline", "subline")]
+    texts = [(index, block) for index, block in enumerate(drawn) if block.kind in _TEXT_KINDS]
     lowest: tuple[float, str] | None = None
-    for block, (kind, words) in zip(texts, capture.parts):
+    for (index, block), (kind, words) in zip(texts, capture.parts):
+        # A shade later in the list is drawn over these words, not under them.
+        shades = _custom_shades(drawn[:index], kit, mode, kit.post_size)
         under = _custom_luminance_under(
             words, capture.photo, image, background, position, shades
         )
@@ -795,9 +853,9 @@ def _custom_contrast(
 
 
 def _custom_shades(
-    layout: CustomLayout, kit: BrandKit, mode: Mode, size: PostSize
+    blocks: list[Block], kit: BrandKit, mode: Mode, size: PostSize
 ) -> tuple[_Shade, ...]:
-    """The layout's shades as the page draws them, in drawing order, in CSS pixels."""
+    """The shades among `blocks` as the page draws them, in drawing order, in CSS pixels."""
     across, down = size.width / 100, size.height / 100
     return tuple(
         _Shade(
@@ -810,7 +868,7 @@ def _custom_shades(
             resolve_colour(block.colour, kit, mode, "background"),
             block.opacity,
         )
-        for block in layout.blocks
+        for block in blocks
         if block.kind == "shade"
     )
 

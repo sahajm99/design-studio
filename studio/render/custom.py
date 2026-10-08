@@ -3,13 +3,16 @@
 The editor arranges a post freely over a photo, and the renderer draws the
 arrangement. These pure functions give the editor its starting arrangement (the
 default one, or one that follows a template candidate) and hold the guardrails
-the renderer applies before it draws: the words and the logo inside the margin,
-every shade and the photo's box on the canvas, the logo always there and never
-too narrow, colours only from the palette and faces only from the kit's. Nothing
-here names a brand.
+the renderer applies before it draws: at most twelve blocks, the words and the
+logo inside the margin, every shade, image and the photo's box on the canvas,
+images only from the uploads folder, the logo always there and never too narrow,
+colours only from the palette and faces only from the kit's. Nothing here names
+a brand.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from studio.contracts import Block, BrandKit, Composition, CustomLayout, Mode, PhotoBox, TextAlign
 from studio.render.faces import face_named
@@ -17,6 +20,8 @@ from studio.render.faces import face_named
 MARGIN_PCT = 4.0  # the words and the logo stay inside this margin, percent of the canvas
 MIN_LOGO_PCT = 14.0  # the logo is never narrower than this, percent of the canvas width
 MIN_PHOTO_PCT = 10.0  # the photo's box is never narrower or shorter than this, percent
+MIN_IMAGE_PCT = 4.0  # an image block is never narrower or shorter than this, percent
+MAX_BLOCKS = 12  # the most blocks a layout keeps; the editor offers no more
 HEADLINE_PX = 64  # a text block's size when size_px is 0
 SUBLINE_PX = 26
 DEFAULT_LOGO_PCT = 24.0
@@ -33,6 +38,10 @@ LOGO_WIDENED = f"The logo was widened to {MIN_LOGO_PCT:g}% of the canvas."
 NOT_IN_PALETTE = "The colour \"{name}\" is not in the palette, so the brand's colour was used."
 FONT_NOT_IN_KIT = "The font \"{name}\" is not in the kit, so the brand's typeface was used."
 LOGO_ADDED = "The logo was added, since every post carries it."
+BLOCKS_LEFT_OUT = f"Only the first {MAX_BLOCKS} blocks were kept."
+EMPTY_TEXT_LEFT_OUT = "A text block with no words was left out."
+IMAGE_LEFT_OUT = "An image whose file is not among the uploads was left out."
+LOGO_FILE_RESET = "The uploaded logo was not found, so the kit's logo was used."
 
 # The most of an unknown colour or font name a line repeats.
 _MAX_NAME_CHARS = 40
@@ -84,21 +93,38 @@ def blocks_for_template(composition: Composition, *, scrim_added: bool = False) 
 
 
 def apply_guardrails(
-    layout: CustomLayout, kit: BrandKit, mode: Mode
+    layout: CustomLayout, kit: BrandKit, mode: Mode, *, uploads_root: Path | None = None
 ) -> tuple[CustomLayout, list[str]]:
     """A copy of the layout with every guardrail applied, and a line for each change it needed.
 
-    In order: the words and the logo inside the margin (a shade only on the canvas, without
-    a line), the logo at least 14% wide, colours only from the palette, faces only from the
-    kit's, italics only from a face's italic file (without a line), sizes, weights and
-    opacities in range (without a line), the photo's box on the canvas and at least 10% each
-    way (without a line), and the default logo when the layout has none. The same line is
-    given once. The renderer draws the copy and reports the lines, so what is reported is
-    what is drawn. The rules are the same in both modes.
+    In order:
+    - a text block whose words are blank is left out;
+    - given `uploads_root`, an image block whose file is not in the brand's folder in it
+      (`uploads_root/<kit.id>`) is left out, and a logo whose uploaded file is not has the
+      kit's file again (its box is kept);
+    - at most twelve blocks: those past the twelfth are left out, from the end of the list,
+      though never the logo;
+    - the words (the headline, the subline and every text block) and the logo inside the
+      margin; a shade and an image only on the canvas (without a line);
+    - the logo at least 14% wide, and an image at least 4% each way (without a line);
+    - colours only from the palette;
+    - sizes, weights and opacities in range (without a line): a text size that is set is at
+      least 12px;
+    - the canvas colour only from the palette;
+    - faces only from the kit's, and italics only from a face's italic file (without a line);
+    - the photo's box on the canvas and at least 10% each way (without a line);
+    - the default logo when the layout has none, in place of the twelfth block if need be.
+
+    The same line is given once. The renderer draws the copy and reports the lines, so what
+    is reported is what is drawn. The rules are the same in both modes.
     """
     lines: list[str] = []
     palette = {colour.name for colour in kit.colours}
-    blocks = [_inside_margin(block, lines) for block in layout.blocks]
+    blocks = [block for block in layout.blocks if _has_words(block, lines)]
+    if uploads_root is not None:
+        blocks = _uploads_only(blocks, uploads_root, kit.id, lines)
+    blocks = _at_most(blocks, MAX_BLOCKS, lines)
+    blocks = [_inside_margin(block, lines) for block in blocks]
     blocks = [_wide_enough(block, lines) for block in blocks]
     blocks = [_palette_colour(block, palette, lines) for block in blocks]
     blocks = [_in_range(block) for block in blocks]
@@ -107,11 +133,38 @@ def apply_guardrails(
     blocks = [_real_italic(block, kit) for block in blocks]
     photo = _photo_inside(layout.photo)
     if not any(block.kind == "logo" for block in blocks):
-        # Every post carries the logo: it goes where the editor starts it.
+        # Every post carries the logo: it goes where the editor starts it, in a place of
+        # its own among the twelve.
         _note(lines, LOGO_ADDED)
+        blocks = _at_most(blocks, MAX_BLOCKS - 1, lines)
         blocks.append(_logo("top", "left"))
     update = {"blocks": blocks, "background": background, "photo": photo}
     return layout.model_copy(update=update), lines
+
+
+def upload_file(image_path: str, uploads_root: Path, brand_id: str) -> Path | None:
+    """The file an upload's media path names, or None when it names no file in the brand's
+    folder of `uploads_root`.
+
+    A media path is relative to the data folder that holds the uploads folder, as the media
+    route serves it: "uploads/<brand>/<id>.png". The file must sit in
+    `uploads_root/<brand_id>` itself, where the brand's uploads are saved. One that climbs out
+    ("../"), an absolute one, one in another folder of the uploads (a session's photo,
+    another brand's), or one that names nothing gives None, so a layout never draws, and
+    Remove never deletes, a file from anywhere else.
+    """
+    if not image_path:
+        return None
+    root = uploads_root.resolve()
+    try:
+        folder = (uploads_root / brand_id).resolve()
+        path = (root.parent / image_path).resolve()
+        if path.parent != folder or not path.is_file():
+            return None
+    except (OSError, ValueError):
+        # A name the system cannot look up (a null byte, a loop of links) names no upload.
+        return None
+    return path
 
 
 def resolve_colour(name: str, kit: BrandKit, mode: Mode, role: str) -> str:
@@ -205,13 +258,60 @@ def _panel(x: float, y: float, w: float, h: float, *, opacity: float = 1.0) -> B
 # --------------------------------------------------------------------- guardrails
 
 
+def _has_words(block: Block, lines: list[str]) -> bool:
+    """A text block with blank words is left out, with a line, since it would draw nothing;
+    every other block stays."""
+    if block.kind != "text" or block.text.strip():
+        return True
+    _note(lines, EMPTY_TEXT_LEFT_OUT)
+    return False
+
+
+def _uploads_only(
+    blocks: list[Block], uploads_root: Path, brand_id: str, lines: list[str]
+) -> list[Block]:
+    """The blocks whose files are the brand's uploads: an image block whose file is not in
+    the brand's uploads folder is left out, and a logo whose uploaded file is not is drawn
+    from the kit's file again, in its own box; each with a line."""
+    kept: list[Block] = []
+    for block in blocks:
+        if block.kind == "image" and upload_file(block.image_path, uploads_root, brand_id) is None:
+            _note(lines, IMAGE_LEFT_OUT)
+            continue
+        overridden = block.kind == "logo" and block.image_path
+        if overridden and upload_file(block.image_path, uploads_root, brand_id) is None:
+            _note(lines, LOGO_FILE_RESET)
+            block = block.model_copy(update={"image_path": ""})
+        kept.append(block)
+    return kept
+
+
+def _at_most(blocks: list[Block], most: int, lines: list[str]) -> list[Block]:
+    """At most `most` blocks: those past it are left out from the end of the list, with a
+    line. The first logo always keeps its place, since every post carries it."""
+    if len(blocks) <= most:
+        return blocks
+    _note(lines, BLOCKS_LEFT_OUT)
+    logo = next((index for index, block in enumerate(blocks) if block.kind == "logo"), None)
+    room = most - (1 if logo is not None else 0)  # the places left beside the logo
+    kept: list[Block] = []
+    for index, block in enumerate(blocks):
+        if index == logo:
+            kept.append(block)
+        elif room > 0:
+            kept.append(block)
+            room -= 1
+    return kept
+
+
 def _inside_margin(block: Block, lines: list[str]) -> Block:
     """Rule 1: the words and the logo moved, then shrunk, until they sit inside the margin.
 
     They take their own height, so only their top edge is held. A shade may run to the
-    canvas edge, as a template's panel does, so it is only kept on the canvas, silently.
+    canvas edge, as a template's panel does, and so may an image, so they are only kept on
+    the canvas, silently.
     """
-    if block.kind == "shade":
+    if block.kind in ("shade", "image"):
         x, w = _span_inside(block.x, block.w, 0.0, 100.0)
         y, h = _span_inside(block.y, block.h, 0.0, 100.0)
         return block.model_copy(update={"x": x, "y": y, "w": w, "h": h})
@@ -225,8 +325,17 @@ def _wide_enough(block: Block, lines: list[str]) -> Block:
     """Rule 2: a logo narrower than the minimum is widened to it.
 
     Shrinking it again would undo that, so a widened logo that now crosses the margin
-    moves left instead.
+    moves left instead. An image narrower or shorter than its minimum is widened or
+    lengthened to it the same way, moving back from the canvas's right or bottom edge,
+    silently, as the photo's box is; so an image whose height was left out still shows.
     """
+    if block.kind == "image":
+        update: dict[str, float] = {}
+        if block.w < MIN_IMAGE_PCT:
+            update.update(w=MIN_IMAGE_PCT, x=min(block.x, 100.0 - MIN_IMAGE_PCT))
+        if block.h < MIN_IMAGE_PCT:
+            update.update(h=MIN_IMAGE_PCT, y=min(block.y, 100.0 - MIN_IMAGE_PCT))
+        return block.model_copy(update=update) if update else block
     if block.kind != "logo" or block.w >= MIN_LOGO_PCT:
         return block
     _note(lines, LOGO_WIDENED)

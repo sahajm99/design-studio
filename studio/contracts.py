@@ -246,7 +246,7 @@ TEXT_OVER_PHOTO: tuple[str, ...] = ("full_bleed", "caption_strip")
 
 # ------------------------------------------------------------- the editor (v3)
 
-BlockKind = Literal["headline", "subline", "logo", "shade"]
+BlockKind = Literal["headline", "subline", "logo", "shade", "text", "image"]
 PhotoFit = Literal["cover", "contain"]
 
 
@@ -276,6 +276,13 @@ class Block(BaseModel):
     font: str = ""
     weight: int = Field(default=0, ge=0, le=900)
     italic: bool = False
+    # v5: a text block carries its own words; an image block an upload's media path. On the
+    # logo block, image_path overrides the kit's logo file with an upload (the Ask mode's
+    # "change the logo"); the box is kept.
+    text: str = Field(default="", max_length=200)  # text blocks only
+    image_path: str = ""  # image blocks, or the logo block's override: uploads/<brand>/<id>.<ext>
+    fit: PhotoFit = "contain"  # image blocks only
+    keep_aspect: bool = True  # image blocks only: resizing keeps the image's proportions
 
 
 class CustomLayout(BaseModel):
@@ -288,6 +295,34 @@ class CustomLayout(BaseModel):
     background: str = ""  # a palette colour name for the canvas behind the photo; "" means the mode's
     # v3.1: the photo's box on the canvas. None means the whole canvas, as before.
     photo: PhotoBox | None = None
+
+
+UploadSource = Literal["editor", "session"]
+
+
+class Upload(BaseModel):
+    """An image the designer uploaded, kept under the brand so it can be placed again."""
+
+    id: str = Field(default_factory=new_id)
+    brand_id: str
+    image_path: str  # media path: uploads/<brand_id>/<id>.<ext>
+    name: str = ""  # the uploaded file's name, trimmed to 80 characters, for the picker
+    width: int = 0
+    height: int = 0
+    source: UploadSource = "editor"
+    created_at: datetime = Field(default_factory=now)
+
+
+class SessionReference(BaseModel):
+    """A designer's picture of how one post should look, attached to a session."""
+
+    id: str = Field(default_factory=new_id)
+    session_id: str
+    upload_id: str  # the Upload that holds the file
+    image_path: str
+    note: str = Field(default="", max_length=80)
+    card: StyleCard | None = None  # the analyst's card, when it could be written
+    created_at: datetime = Field(default_factory=now)
 
 
 class Composition(BaseModel):
@@ -373,7 +408,11 @@ class Post(BaseModel):
 # --------------------------------------------------------------------- runs
 
 # "create" is the v1 one-shot run, kept so old rows still load. v2 runs are the session stages.
-RunKind = Literal["create", "revise", "draft", "samples", "revise_prompt", "compose", "finish", "auto", "scout"]
+# v5: "edit" is one request of the editor's Ask mode.
+RunKind = Literal[
+    "create", "revise", "draft", "samples", "revise_prompt", "compose", "finish", "auto", "scout",
+    "edit",
+]
 RunStatus = Literal["running", "succeeded", "failed", "interrupted"]
 StepStatus = Literal["running", "succeeded", "failed"]
 
@@ -754,3 +793,47 @@ class StudioSession(BaseModel):
     chosen_direction: Direction | None = None  # a copy, with the designer's edits
     created_at: datetime = Field(default_factory=now)
     updated_at: datetime = Field(default_factory=now)
+
+
+# ------------------------------------------------------ the editor's Ask mode (v5)
+
+EditOp = Literal[
+    "move", "resize", "set_text", "set_style", "replace_image", "add_text", "add_image",
+    "add_shade", "delete", "reorder", "set_photo", "set_background",
+]
+
+
+class EditorEdit(BaseModel):
+    """One change to the layout, as the editor agent names it. A field an op does not use
+    stays None. `block` is the block's index in the layout's list, as the context numbers
+    them."""
+
+    op: EditOp
+    block: int | None = None
+    x: float | None = None
+    y: float | None = None
+    w: float | None = None
+    h: float | None = None
+    text: str | None = None
+    font: str | None = None
+    weight: int | None = None
+    italic: bool | None = None
+    size_px: int | None = None
+    align: TextAlign | None = None
+    colour: str | None = None
+    opacity: float | None = None
+    upload_id: str | None = None
+    fit: PhotoFit | None = None
+    direction: Literal["forward", "back"] | None = None
+    offset_x: float | None = None
+    offset_y: float | None = None
+    background: str | None = None
+
+
+class EditorAnswer(BaseModel):
+    """The editor agent's answer: the edits to apply and one sentence on them, or a question."""
+
+    usable: bool = True
+    question: str = ""
+    edits: list[EditorEdit] = Field(default_factory=list)
+    summary: str = ""

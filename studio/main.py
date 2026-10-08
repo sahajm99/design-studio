@@ -87,7 +87,8 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
         kit = load_brand_kit(settings.brands_dir, settings.brand_id)
         llm = get_llm(settings)
         photo_provider = get_photo_provider(settings)
-        renderer = Renderer(store.work_dir)
+        # A custom layout's image blocks and an uploaded logo must be files in the uploads folder.
+        renderer = Renderer(store.work_dir, uploads_root=store.uploads_dir)
         await renderer.start()
 
         deps = Deps(

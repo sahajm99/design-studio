@@ -1,15 +1,17 @@
-// Design Studio: the editor, where the designer places the words, the logo, shades and
-// the photo by hand. No build step, no framework: pointer events only.
+// Design Studio: the editor, where the designer places the words, the logo, shades, their
+// own lines of text, uploaded images and the photo by hand. No build step, no framework:
+// pointer events only.
 //
 // The canvas is the post at half size (540 by 675 on a wide screen, scaled down whole on
 // a phone), drawn the way the renderer draws a custom layout: the canvas colour, the photo
-// in its box with its fit and position, then the shades, the words in their faces, and
-// the logo on top. Every place is kept in percent of the canvas, in an object that mirrors
-// CustomLayout, and Preview posts exactly that object. The photo is chosen, moved and
-// resized like a block, as the bottom layer. Dragging, resizing and nudging keep the words
-// and the logo inside the 4% margin, every shade and the photo on the canvas, and the logo
-// at least 14% wide: the rules the renderer applies before it draws (see
-// studio/render/custom.py), so what the designer sees is what the renderer draws.
+// in its box with its fit and position, then the blocks in the order of their list, a
+// later block over an earlier one. Every place is kept in percent of the canvas, in an
+// object that mirrors CustomLayout, and Preview posts exactly that object. The photo is
+// chosen, moved and resized like a block, as the bottom layer. Dragging, resizing and
+// nudging keep the words and the logo inside the 4% margin, every shade, image and the
+// photo on the canvas, and the logo at least 14% wide: the rules the renderer applies
+// before it draws (see studio/render/custom.py), so what the designer sees is what the
+// renderer draws. Images come from the brand's uploads, through the inline picker.
 (() => {
   "use strict";
 
@@ -21,30 +23,42 @@
   const MIN_LOGO = 14;
   // Sums of percentages carry rounding noise; an edge this close to the margin is on it.
   const EPSILON = 1e-6;
-  // A text block's size when size_px is 0, and the range a size that is set keeps to.
-  const DEFAULT_PX = { headline: 64, subline: 26 };
+  // A text block's size when size_px is 0, and the range a size that is set keeps to. The
+  // designer's own text block starts at the headline's size, as the renderer sets it.
+  const DEFAULT_PX = { headline: 64, subline: 26, text: 64 };
   const MIN_PX = 12;
   const MAX_PX = 400;
   // The range a weight that is set keeps to; 0 is the kit's weight for the role.
   const MIN_WEIGHT = 100;
   const MAX_WEIGHT = 900;
+  // The most blocks a layout keeps (the renderer's MAX_BLOCKS), the most words a text block
+  // holds, and the least an image may be each way, in percent of the canvas (the
+  // guardrails' MIN_IMAGE_PCT).
+  const MAX_BLOCKS = 12;
+  const MAX_TEXT_CHARS = 200;
+  const MIN_IMAGE = 4;
   // The smallest each kind can be made by hand, in percent: [width, height]. The words
   // and the logo take their height from their width, so only their width has a minimum.
   const SMALLEST = {
     headline: [4, 0],
     subline: [4, 0],
+    text: [4, 0],
     logo: [MIN_LOGO, 0],
     shade: [4, 4],
+    image: [MIN_IMAGE, MIN_IMAGE],
     photo: [10, 10],
   };
   // The handles each kind shows, by compass point. The words change width only, so they
   // have no top or bottom handle; the logo keeps its proportions, so it has corners only.
   const EVERY_HANDLE = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+  const WIDTH_HANDLES = ["nw", "ne", "e", "se", "sw", "w"];
   const HANDLES = {
-    headline: ["nw", "ne", "e", "se", "sw", "w"],
-    subline: ["nw", "ne", "e", "se", "sw", "w"],
+    headline: WIDTH_HANDLES,
+    subline: WIDTH_HANDLES,
+    text: WIDTH_HANDLES,
     logo: ["nw", "ne", "se", "sw"],
     shade: EVERY_HANDLE,
+    image: EVERY_HANDLE,
     photo: EVERY_HANDLE,
   };
   // An arrow key nudges the chosen item this far, in percent of the canvas.
@@ -57,13 +71,9 @@
   const PAN_DIRECTIONS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
   // The photo's box while it covers the whole canvas, which the layout keeps as null.
   const WHOLE_CANVAS = Object.freeze({ x: 0, y: 0, w: 100, h: 100 });
-  // A new shade: a band across the lower part of the canvas, behind the words.
-  const NEW_SHADE = {
-    kind: "shade",
-    x: 4,
-    y: 56,
-    w: 92,
-    h: 40,
+  // The fields every block carries besides its kind and box, at the values CustomLayout
+  // gives a block that leaves them out.
+  const BLOCK_DEFAULTS = {
     align: "left",
     size_px: 0,
     colour: "",
@@ -71,22 +81,51 @@
     font: "",
     weight: 0,
     italic: false,
+    text: "",
+    image_path: "",
+    fit: "contain",
+    keep_aspect: true,
   };
-  // The role whose colour a block takes when its colour is the brand's ("").
-  const ROLES = { headline: "headline", subline: "body", shade: "background" };
-  // The renderer draws the photo first, then the shades, then the words, with the logo
-  // on top. The photo's layer is set in app.css.
-  const LAYERS = { shade: 1, headline: 2, subline: 2, logo: 3 };
+  // A new shade: a band across the lower part of the canvas, behind the words.
+  const NEW_SHADE = { ...BLOCK_DEFAULTS, kind: "shade", x: 4, y: 56, w: 92, h: 40 };
+  // A new line of text: 60% wide in the middle of the canvas, its words centred.
+  const NEW_TEXT_WORDS = "New text";
+  const NEW_TEXT = {
+    ...BLOCK_DEFAULTS,
+    kind: "text",
+    x: 20,
+    y: 46,
+    w: 60,
+    h: 0,
+    align: "centre",
+    text: NEW_TEXT_WORDS,
+  };
+  // A new image: a third of the canvas wide, whole and opaque; its height follows the file.
+  const NEW_IMAGE_WIDTH = 100 / 3;
+  const NEW_IMAGE = { ...BLOCK_DEFAULTS, kind: "image", opacity: 1, fit: "contain" };
+  // The role whose colour a block takes when its colour is the brand's (""). The
+  // designer's own text takes the body's, as the renderer gives it.
+  const ROLES = { headline: "headline", subline: "body", text: "body", shade: "background" };
+  // The blocks a designer can delete, and move up or down the list. The headline, the
+  // subline and the logo keep their places; a shade has its own Remove as well.
+  const DELETABLE = ["text", "image", "shade"];
+  const ORDERABLE = ["text", "image", "shade"];
   const KIND_NAMES = {
     headline: "Headline",
     subline: "Subline",
+    text: "Text",
     logo: "Logo",
     shade: "Shade",
+    image: "Image",
     photo: "Photo",
   };
   const RENDERING = "Rendering the preview…";
   const PREVIEW_FAILED = "The preview could not be rendered. Try again.";
   const SEE_THE_RUN = "See the run";
+  const UPLOADING = "Uploading…";
+  const UPLOAD_FAILED = "The image could not be uploaded. Try again.";
+  const UPLOADS_FAILED = "Your uploads could not be loaded. Try again.";
+  const UNTITLED_UPLOAD = "Untitled";
   // The canvas names each face by its place in the list, so no face's own name can clash
   // with a font the page itself uses.
   const FACE_FAMILY = "Editor face";
@@ -98,8 +137,8 @@
 
   // The page's state: the arrangement and the mode, what is chosen (a block's index,
   // PHOTO or NONE), how many changes the canvas has had (so a preview knows whether it
-  // still shows it), and whether the faces in use have loaded (so the words are measured
-  // in them).
+  // still shows it), whether the faces in use have loaded (so the words are measured
+  // in them), and the brand's uploads as the picker last listed them.
   const editor = {
     data: null,
     layout: null,
@@ -107,6 +146,7 @@
     selected: NONE,
     changes: 0,
     fontLoaded: false,
+    uploads: [],
   };
   // The page's elements, found once.
   const ui = {};
@@ -119,14 +159,25 @@
     return Math.min(Math.max(value, low), Math.max(low, high));
   }
 
+  // The blocks that hold words: the headline, the subline and the designer's own text.
   function isText(kind) {
-    return kind === "headline" || kind === "subline";
+    return kind === "headline" || kind === "subline" || kind === "text";
   }
 
-  // A shade and the photo have a height of their own; the words and the logo take theirs
-  // from their width.
+  // A shade, an image and the photo have a height of their own; the words and the logo
+  // take theirs from their width.
   function hasOwnHeight(kind) {
-    return kind === "shade" || kind === "photo";
+    return kind === "shade" || kind === "image" || kind === "photo";
+  }
+
+  // An upload's media path, as the layout keeps it, from its address under /media/, and
+  // back: the media route serves the data folder's files at /media/<media path>.
+  function mediaPath(url) {
+    return url.replace(/^\/media\//, "");
+  }
+
+  function mediaUrl(path) {
+    return `/media/${path}`;
   }
 
   // ------------------------------------------------------------ geometry and rules
@@ -153,11 +204,15 @@
   function guard(block) {
     const [low, high] = edges(block.kind);
     [block.x, block.w] = spanInside(block.x, block.w, low, high);
-    if (block.kind === "shade") [block.y, block.h] = spanInside(block.y, block.h, low, high);
+    if (hasOwnHeight(block.kind)) [block.y, block.h] = spanInside(block.y, block.h, low, high);
     else block.y = Math.max(block.y, MARGIN);
     if (block.kind === "logo" && block.w < MIN_LOGO) {
       block.w = MIN_LOGO;
       block.x = Math.min(block.x, FAR - MIN_LOGO);
+    }
+    if (block.kind === "image" && block.w < MIN_IMAGE) {
+      block.w = MIN_IMAGE;
+      block.x = Math.min(block.x, 100 - MIN_IMAGE);
     }
     if (!paletteHex(block.colour)) block.colour = "";
     if (block.font && !faceNamed(block.font)) block.font = "";
@@ -225,13 +280,18 @@
     return [start, length];
   }
 
-  // An item resized from a handle by (dx, dy), from its box at the start (`from`). A shade
-  // and the photo resize freely; the words change width only, from a side or a corner;
-  // the logo keeps its proportions.
+  // An item resized from a handle by (dx, dy), from its box at the start (`from`). A shade,
+  // the photo and an image that does not keep its aspect resize freely; the words change
+  // width only, from a side or a corner; the logo and an image that keeps its aspect keep
+  // their proportions.
   function resizeItem(kind, box, from, handle, dx, dy) {
     const [across, down] = handleSides(handle);
     if (kind === "logo") {
       resizeLogo(box, from, across, down, dx, dy);
+      return;
+    }
+    if (kind === "image" && box.keep_aspect) {
+      resizeInProportion(box, from, across, down, dx, dy);
       return;
     }
     const [low, high] = edges(kind);
@@ -257,6 +317,35 @@
     logo.w = within(from.w + grow, MIN_LOGO, Math.min(roomAcross, roomDown));
     logo.x = across > 0 ? from.x : right - logo.w;
     logo.y = down > 0 ? from.y : Math.max(MARGIN, bottom - logo.w * tall);
+  }
+
+  // An image that keeps its aspect, resized from any handle: both sides scale by one
+  // factor, so the picture keeps its proportions in its box. The edge or corner opposite
+  // the handle stays put; a side handle grows the other way from the top or the left edge.
+  // A corner follows the way the pointer moved further. The box never grows past the room
+  // on the canvas either way, which wins over an image's smallest size when the two clash
+  // (a very wide image near an edge), and the result is held on the canvas, so rounding
+  // never leaves an edge a hair past it, where the server refuses the box.
+  function resizeInProportion(box, from, across, down, dx, dy) {
+    if (from.w <= 0 || from.h <= 0) return;
+    const wider = across ? (from.w + across * dx) / from.w : null;
+    const taller = down ? (from.h + down * dy) / from.h : null;
+    let scale = wider === null ? taller : wider;
+    if (wider !== null && taller !== null && Math.abs(taller - 1) > Math.abs(wider - 1)) {
+      scale = taller;
+    }
+    const right = from.x + from.w;
+    const bottom = from.y + from.h;
+    const roomAcross = across < 0 ? right : 100 - from.x;
+    const roomDown = down < 0 ? bottom : 100 - from.y;
+    const [leastWidth, leastHeight] = SMALLEST.image;
+    const low = Math.max(leastWidth / from.w, leastHeight / from.h);
+    const high = Math.min(roomAcross / from.w, roomDown / from.h);
+    scale = within(scale, Math.min(low, high), high);
+    box.w = Math.min(100, from.w * scale);
+    box.h = Math.min(100, from.h * scale);
+    box.x = Math.max(0, across < 0 ? right - box.w : from.x);
+    box.y = Math.max(0, down < 0 ? bottom - box.h : from.y);
   }
 
   // A starting arrangement sets the subline a fixed distance under the headline, which
@@ -428,17 +517,26 @@
     if (hasOwnHeight(kind)) style.height = `${box.h}%`;
   }
 
-  // Everything about a block but its place: its words, face, size, colour and layer.
+  // Everything about a block but its place: its words, face, size, colour, file and layer.
+  // The layer is its place in the list, above the photo's, so a later block sits over an
+  // earlier one, as the renderer draws them.
   function paintBlock(element, block) {
     const style = element.style;
-    style.zIndex = String(LAYERS[block.kind]);
+    style.zIndex = String(Number(element.dataset.block) + 1);
     if (block.kind === "shade") {
       style.background = blockHex(block);
       style.opacity = String(block.opacity);
     } else if (block.kind === "logo") {
-      if (element.getAttribute("src") !== logoUrl()) element.src = logoUrl();
+      // An uploaded logo stands in for the kit's file, in the same box.
+      const src = block.image_path ? mediaUrl(block.image_path) : logoUrl();
+      if (element.getAttribute("src") !== src) element.src = src;
+    } else if (block.kind === "image") {
+      const src = mediaUrl(block.image_path);
+      if (element.getAttribute("src") !== src) element.src = src;
+      style.objectFit = block.fit;
+      style.opacity = String(block.opacity);
     } else {
-      const words = wordsOf(block.kind);
+      const words = block.kind === "text" ? block.text : wordsOf(block.kind);
       element.textContent = words;
       // The renderer leaves out words that are empty; their place stays visible here.
       element.classList.toggle("is-empty", !words.trim());
@@ -452,12 +550,15 @@
   }
 
   function buildBlock(block, index) {
-    const element = document.createElement(block.kind === "logo" ? "img" : "div");
+    const picture = block.kind === "logo" || block.kind === "image";
+    const element = document.createElement(picture ? "img" : "div");
     element.className = `editor-block editor-${block.kind}`;
     element.dataset.block = String(index);
-    if (block.kind === "logo") {
+    if (picture) {
       element.alt = "";
       element.draggable = false;
+    }
+    if (block.kind === "logo") {
       // The logo's height is known once its file has loaded.
       element.addEventListener("load", redraw);
     }
@@ -475,12 +576,13 @@
     ui.canvas.style.backgroundColor = paletteHex(layout.background) || roleHex("background");
   }
 
-  // Build every block again, after one was added or removed.
+  // Build every block again, after one was added, removed or moved in the list.
   function drawCanvas() {
     ui.canvas.querySelectorAll("[data-block]").forEach((element) => element.remove());
     editor.layout.blocks.forEach((block, index) => {
       ui.canvas.insertBefore(buildBlock(block, index), ui.selection);
     });
+    syncAddButtons();
     redraw();
   }
 
@@ -607,8 +709,8 @@
   // ------------------------------------------------------------ keyboard
 
   // With something chosen, the arrow keys nudge it (further with Shift), Delete or
-  // Backspace removes a shade, and Escape lets the choice go. Keys pressed in a field,
-  // or with a modifier the browser uses, are left alone.
+  // Backspace removes a shade, a text block or an image, and Escape lets the choice go.
+  // Keys pressed in a field, or with a modifier the browser uses, are left alone.
   function onKeyDown(event) {
     if (editor.selected === NONE || event.ctrlKey || event.metaKey || event.altKey) return;
     const focused = document.activeElement;
@@ -620,9 +722,9 @@
       nudge(arrow[0] * step, arrow[1] * step);
     } else if (event.key === "Delete" || event.key === "Backspace") {
       const block = selectedBlock();
-      if (!block || block.kind !== "shade") return;
+      if (!block || !DELETABLE.includes(block.kind)) return;
       event.preventDefault();
-      removeShade();
+      deleteSelected();
     } else if (event.key === "Escape") {
       select(NONE);
     }
@@ -669,8 +771,12 @@
   }
 
   // The panel shows the chosen item's own controls under its name: the words' face,
-  // weight, italics, size, alignment and colour, a shade's colour and opacity, the photo's
-  // fit, position and the canvas colour. The post mode and the logo width are always there.
+  // weight, italics, size, alignment and colour (and a text block's words), a shade's
+  // colour and opacity, an image's fit, aspect and opacity, the photo's fit, position and
+  // the canvas colour, then Bring forward, Send back and Delete for the blocks that have
+  // them. The post mode and the logo width are always there. A part is shown for the
+  // item's group (data-editor-for: the words share one) or for its own kind
+  // (data-editor-for-kind).
   function syncPanel() {
     const item = selectedItem();
     const group = item ? kindGroup(item.kind) : "";
@@ -680,11 +786,19 @@
     ui.blockParts.forEach((part) => {
       part.hidden = !part.dataset.editorFor.split(" ").includes(group);
     });
+    ui.kindParts.forEach((part) => {
+      part.hidden = !(item && part.dataset.editorForKind.split(" ").includes(item.kind));
+    });
     if (group === "text") syncText(item.box);
     if (group === "text" || group === "shade") {
       syncSwatches("colour", item.box.colour, roleHex(ROLES[item.kind]));
     }
     if (group === "shade") ui.opacity.value = String(item.box.opacity);
+    if (group === "image") syncImage(item.box);
+    if (item && ORDERABLE.includes(item.kind)) {
+      ui.forward.disabled = editor.selected >= editor.layout.blocks.length - 1;
+      ui.back.disabled = editor.selected <= 0;
+    }
 
     const layout = editor.layout;
     checkRadio("photo_fit", layout.photo_fit);
@@ -695,8 +809,10 @@
     ui.logoWidth.disabled = !logo;
   }
 
-  // A headline's or a subline's face, weight and italics, then its size and alignment.
-  // A face without an italic file leaves the toggle off and disabled, with a hint.
+  // A headline's, a subline's or a text block's face, weight and italics, then its size
+  // and alignment, and a text block's words. A face without an italic file leaves the
+  // toggle off and disabled, with a hint. The words are set only when they differ, so the
+  // field keeps its caret while the designer types in it.
   function syncText(block) {
     const face = faceOf(block);
     const hasItalic = Boolean(face && face.italic_url);
@@ -707,6 +823,14 @@
     ui.noItalic.hidden = hasItalic;
     ui.size.value = String(block.size_px || DEFAULT_PX[block.kind]);
     checkRadio("align", block.align);
+    if (block.kind === "text" && ui.text.value !== block.text) ui.text.value = block.text;
+  }
+
+  // An image's fit, whether it keeps its aspect, and its opacity.
+  function syncImage(block) {
+    checkRadio("image_fit", block.fit);
+    ui.keepAspect.checked = Boolean(block.keep_aspect);
+    ui.imageOpacity.value = String(block.opacity);
   }
 
   function onRadio(name, apply) {
@@ -825,8 +949,75 @@
     drawSelection();
   }
 
+  // The list holds as many blocks as a layout keeps, so nothing more can be added.
+  function isFull() {
+    return editor.layout.blocks.length >= MAX_BLOCKS;
+  }
+
+  // The three Add buttons wait while the list is full, and the picker closes.
+  function syncAddButtons() {
+    const full = isFull();
+    [ui.addShade, ui.addText, ui.addImage].forEach((button) => {
+      button.disabled = full;
+    });
+    if (full) closePicker();
+  }
+
+  // A new shade goes behind the words and the logo, as it always has: into the list just
+  // before the first of them, so it is drawn before them and they sit on top.
   function addShade() {
-    editor.layout.blocks.push({ ...NEW_SHADE });
+    if (isFull()) return;
+    const blocks = editor.layout.blocks;
+    const words = blocks.findIndex((block) => isText(block.kind) || block.kind === "logo");
+    const index = words < 0 ? blocks.length : words;
+    blocks.splice(index, 0, { ...NEW_SHADE });
+    markStale();
+    drawCanvas();
+    select(index);
+  }
+
+  // A new line of text, on top of the list, in the middle of the canvas once its height
+  // is known, and chosen, with its words selected in the Words field: typing replaces them
+  // at once, and Backspace clears them there rather than deleting the block.
+  function addText() {
+    if (isFull()) return;
+    const block = { ...NEW_TEXT };
+    editor.layout.blocks.push(block);
+    const index = editor.layout.blocks.length - 1;
+    markStale();
+    drawCanvas();
+    const height = heightOf(block.kind, block, blockElement(index));
+    block.y = within((100 - height) / 2, MARGIN, FAR - height);
+    redraw();
+    select(index);
+    ui.text.focus();
+    ui.text.select();
+  }
+
+  // An upload placed as a new image on top of the list: a third of the canvas wide, its
+  // height from the picture's proportions (a picture too tall for that fits the canvas's
+  // height instead, and one too wide is given the guardrails' smallest height, its picture
+  // shown whole inside), centred and chosen.
+  function placeImage(upload) {
+    if (isFull()) return;
+    const size = editor.data.post_size;
+    const tall = upload.width > 0 && upload.height > 0 ? upload.height / upload.width : 1;
+    let w = NEW_IMAGE_WIDTH;
+    let h = w * (size.width / size.height) * tall;
+    if (h > 100) {
+      w = Math.max(MIN_IMAGE, (w * 100) / h);
+      h = 100;
+    }
+    h = Math.max(h, MIN_IMAGE);
+    const block = {
+      ...NEW_IMAGE,
+      x: (100 - w) / 2,
+      y: (100 - h) / 2,
+      w,
+      h,
+      image_path: mediaPath(upload.url),
+    };
+    editor.layout.blocks.push(block);
     markStale();
     drawCanvas();
     select(editor.layout.blocks.length - 1);
@@ -840,6 +1031,155 @@
     markStale();
     drawCanvas();
     syncPanel();
+  }
+
+  // The chosen shade, text block or image taken off the canvas. The headline, the subline
+  // and the logo stay.
+  function deleteSelected() {
+    const block = selectedBlock();
+    if (!block || !DELETABLE.includes(block.kind)) return;
+    editor.layout.blocks.splice(editor.selected, 1);
+    editor.selected = NONE;
+    markStale();
+    drawCanvas();
+    syncPanel();
+  }
+
+  // The chosen block swapped with its neighbour in the list: forward (1) moves it later,
+  // so it is drawn over that neighbour; back (-1) earlier, so under it. The choice stays
+  // on the block.
+  function moveInList(step) {
+    const blocks = editor.layout.blocks;
+    const from = editor.selected;
+    const to = from + step;
+    const block = selectedBlock();
+    if (!block || !ORDERABLE.includes(block.kind) || to < 0 || to >= blocks.length) return;
+    [blocks[from], blocks[to]] = [blocks[to], blocks[from]];
+    markStale();
+    drawCanvas();
+    select(to);
+  }
+
+  // An image's opacity as it is typed, without drawing the panel again under the caret.
+  function setImageOpacity(opacity) {
+    const block = selectedBlock();
+    if (!block || block.kind !== "image") return;
+    block.opacity = within(opacity, 0, 1);
+    markStale();
+    redraw();
+  }
+
+  // ------------------------------------------------------------ the uploads picker
+
+  // Add image opens the picker under the Add buttons, with the brand's uploads listed
+  // afresh each time, and closes it again; Add image says which, for a screen reader.
+  function openPicker() {
+    ui.uploads.hidden = false;
+    ui.addImage.setAttribute("aria-expanded", "true");
+    loadUploads();
+  }
+
+  function closePicker() {
+    ui.uploads.hidden = true;
+    ui.addImage.setAttribute("aria-expanded", "false");
+  }
+
+  function togglePicker() {
+    if (ui.uploads.hidden) openPicker();
+    else closePicker();
+  }
+
+  // The picker's two lines: what went wrong, and what is happening; each hidden when empty.
+  function showUploadError(message) {
+    setText(ui.uploadError, message);
+    ui.uploadError.hidden = !message;
+  }
+
+  function setUploadStatus(message) {
+    setText(ui.uploadStatus, message);
+    ui.uploadStatus.hidden = !message;
+  }
+
+  // The brand's uploads, newest first, as thumbnails with their names, each a button that
+  // places it.
+  function showUploads(uploads) {
+    editor.uploads = uploads;
+    ui.uploadsList.replaceChildren(
+      ...uploads.map((upload) => {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "upload-pick";
+        button.dataset.uploadId = upload.id;
+        const thumb = document.createElement("span");
+        thumb.className = "upload-thumb";
+        const image = document.createElement("img");
+        image.src = upload.url;
+        image.alt = "";
+        image.loading = "lazy";
+        thumb.append(image);
+        const name = document.createElement("span");
+        name.className = "upload-name";
+        name.textContent = upload.name || UNTITLED_UPLOAD;
+        button.append(thumb, name);
+        item.append(button);
+        return item;
+      }),
+    );
+    ui.uploadsEmpty.hidden = uploads.length > 0;
+  }
+
+  // The brand's uploads from the server, newest first; a line says so when they cannot be
+  // listed.
+  async function loadUploads() {
+    showUploadError("");
+    try {
+      const response = await fetch("/api/uploads");
+      if (!response.ok) throw new Error(String(response.status));
+      const result = await response.json();
+      showUploads(Array.isArray(result.uploads) ? result.uploads : []);
+    } catch {
+      showUploadError(UPLOADS_FAILED);
+    }
+  }
+
+  // The chosen file sent to the brand's shelf, then placed. A file the studio cannot use
+  // comes back with the reason, shown under the field.
+  async function uploadImage() {
+    const file = ui.uploadFile.files[0];
+    if (!file || isFull()) return;
+    const form = new FormData();
+    form.append("image", file);
+    ui.uploadButton.disabled = true;
+    showUploadError("");
+    setUploadStatus(UPLOADING);
+    try {
+      const response = await fetch("/editor/upload", { method: "POST", body: form });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const reason = typeof result.error === "string" && result.error;
+        showUploadError(reason || UPLOAD_FAILED);
+        return;
+      }
+      ui.uploadFile.value = "";
+      placeImage(result);
+      closePicker();
+    } catch {
+      showUploadError(UPLOAD_FAILED); // offline, or the server went away
+    } finally {
+      setUploadStatus("");
+      ui.uploadButton.disabled = !ui.uploadFile.files.length;
+    }
+  }
+
+  // A thumbnail pressed in the picker places its upload.
+  function onUploadPick(event) {
+    const button = event.target.closest("[data-upload-id]");
+    if (!button) return;
+    const upload = editor.uploads.find((entry) => entry.id === button.dataset.uploadId);
+    if (!upload) return;
+    placeImage(upload);
+    closePicker();
   }
 
   function wirePanel() {
@@ -862,6 +1202,30 @@
     });
     ui.removeShade.addEventListener("click", removeShade);
     ui.addShade.addEventListener("click", addShade);
+    // v5: the designer's own text and images, and the order of the blocks.
+    ui.text.addEventListener("input", () => {
+      const block = selectedBlock();
+      if (!block || block.kind !== "text") return;
+      block.text = ui.text.value.slice(0, MAX_TEXT_CHARS);
+      markStale();
+      redraw();
+    });
+    ui.addText.addEventListener("click", addText);
+    ui.addImage.addEventListener("click", togglePicker);
+    ui.uploadFile.addEventListener("change", () => {
+      ui.uploadButton.disabled = !ui.uploadFile.files.length;
+      showUploadError("");
+    });
+    ui.uploadButton.addEventListener("click", uploadImage);
+    ui.uploadsList.addEventListener("click", onUploadPick);
+    onRadio("image_fit", (value) => updateSelected({ fit: value }));
+    ui.keepAspect.addEventListener("change", () => {
+      updateSelected({ keep_aspect: ui.keepAspect.checked });
+    });
+    onNumber(ui.imageOpacity, 0, 1, setImageOpacity);
+    ui.forward.addEventListener("click", () => moveInList(1));
+    ui.back.addEventListener("click", () => moveInList(-1));
+    ui.deleteButton.addEventListener("click", deleteSelected);
     onRadio("photo_fit", (value) => {
       editor.layout.photo_fit = value;
       markStale();
@@ -976,6 +1340,7 @@
     ui.blockName = root.querySelector("[data-editor-block-name]");
     ui.noBlock = root.querySelector("[data-editor-no-block]");
     ui.blockParts = Array.from(root.querySelectorAll("[data-editor-for]"));
+    ui.kindParts = Array.from(root.querySelectorAll("[data-editor-for-kind]"));
     ui.font = root.querySelector("[data-editor-font]");
     ui.weight = root.querySelector("[data-editor-weight]");
     ui.italic = root.querySelector("[data-editor-italic]");
@@ -984,6 +1349,21 @@
     ui.opacity = root.querySelector("[data-editor-opacity]");
     ui.removeShade = root.querySelector("[data-editor-remove-shade]");
     ui.addShade = root.querySelector("[data-editor-add-shade]");
+    ui.text = root.querySelector("[data-editor-text]");
+    ui.keepAspect = root.querySelector("[data-editor-keep-aspect]");
+    ui.imageOpacity = root.querySelector("[data-editor-image-opacity]");
+    ui.forward = root.querySelector("[data-editor-forward]");
+    ui.back = root.querySelector("[data-editor-back]");
+    ui.deleteButton = root.querySelector("[data-editor-delete]");
+    ui.addText = root.querySelector("[data-editor-add-text]");
+    ui.addImage = root.querySelector("[data-editor-add-image]");
+    ui.uploads = root.querySelector("[data-editor-uploads]");
+    ui.uploadFile = root.querySelector("[data-editor-upload-file]");
+    ui.uploadButton = root.querySelector("[data-editor-upload-button]");
+    ui.uploadStatus = root.querySelector("[data-editor-upload-status]");
+    ui.uploadError = root.querySelector("[data-editor-upload-error]");
+    ui.uploadsList = root.querySelector("[data-editor-uploads-list]");
+    ui.uploadsEmpty = root.querySelector("[data-editor-uploads-empty]");
     ui.fill = root.querySelector("[data-editor-fill]");
     ui.logoWidth = root.querySelector("[data-editor-logo-width]");
     ui.preview = root.querySelector("[data-editor-preview]");

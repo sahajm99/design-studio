@@ -1293,7 +1293,8 @@ a.badge:hover {
 .contact-card,
 .sample-card,
 .ref-card,
-.direction-card {
+.direction-card,
+.upload-card {
   position: relative;
   min-width: 0;
   border: 1px solid var(--ink-line);
@@ -2553,6 +2554,53 @@ details.panel[open] > summary {
   font-size: 14px;
 }
 
+/* Your uploads (v5): the brand's shelf as a row of small soft cards that wraps, each with
+   its picture whole, its name, its size and Remove. A phone shows two a row. */
+.upload-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(9.5rem, 100%), 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 639px) {
+  .upload-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.upload-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 8px 12px;
+}
+
+.upload-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.upload-card .upload-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.upload-meta {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.upload-card .inline-form {
+  margin-top: auto;
+  padding: 0 4px;
+}
+
 .import-actions {
   margin-bottom: 0;
 }
@@ -3197,6 +3245,87 @@ details.panel[open] > summary {
   cursor: pointer;
 }
 
+/* Add image's picker: an inset under the Add buttons, never a dialog. The upload field on
+   top, the brand's uploads under it as small cards to press. */
+.editor-uploads {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.editor-uploads .hint {
+  margin: 6px 0 0;
+}
+
+.editor-shelf-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.editor-shelf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* An upload to press: its picture whole on a quiet square, its name under it. */
+.upload-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 6px 6px 8px;
+  border: 1px solid var(--ink-line);
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 150ms var(--ease-glass),
+    box-shadow 150ms var(--ease-glass);
+}
+
+.upload-pick:hover {
+  border-color: var(--ink-15);
+  box-shadow: var(--shadow-hover);
+}
+
+.upload-pick:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--ink-10);
+}
+
+.upload-thumb {
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  background: var(--ink-wash);
+}
+
+.upload-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* A name wraps rather than being cut short. */
+.upload-name {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 60rem) {
   .editor {
     grid-template-columns: minmax(0, 1fr);
@@ -3255,14 +3384,17 @@ details.panel[open] > summary {
   touch-action: none;
 }
 
-/* The words as the renderer sets them (base.css and custom.html). */
+/* The words as the renderer sets them (base.css and custom.html). The designer's own text
+   is set like the headline. */
 .editor-headline,
-.editor-subline {
+.editor-subline,
+.editor-text {
   font-size: calc(var(--px) * 100cqw / var(--post-width));
   text-wrap: balance;
 }
 
-.editor-headline {
+.editor-headline,
+.editor-text {
   letter-spacing: var(--headline-tracking);
   line-height: 1.08;
 }
@@ -3284,14 +3416,21 @@ details.panel[open] > summary {
   height: auto;
 }
 
+/* An uploaded image fills its box as its fit says; the script sets the box and the fit. */
+.editor-image {
+  display: block;
+  max-width: none;
+}
+
 /* Only the chosen item has an outline, drawn over everything with its handles, and
    dashed for the photo. The line sits just inside the item, so it shows at the canvas's
    edge too; a faint halo outside it keeps it visible over a photo of any tone. --handle
-   is the handles' size, which the script reads as well. */
+   is the handles' size, which the script reads as well. The blocks are layered by their
+   place in the list, at most twelve of them, so the outline goes above the twelfth. */
 .editor-selection {
   --handle: 14px;
   position: absolute;
-  z-index: 4;
+  z-index: 13;
   pointer-events: none;
   outline: 1px solid var(--ink);
   outline-offset: -1px;

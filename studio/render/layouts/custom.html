@@ -2,10 +2,13 @@
 {% block style %}
 /* Custom: the designer's own arrangement from the editor. The photo fills its box,
    the whole canvas unless the designer gave it a smaller one, and each block sits
-   where it was placed, in percent of the canvas: the shades over the photo, the
-   words over the shades and the logo on top. Every place, size, colour and face
-   arrives from the renderer, so nothing here names a brand. The canvas colour
-   shows around the photo's box, and around a photo that is fitted whole. */
+   where it was placed, in percent of the canvas, in the order of the list: a later
+   block over an earlier one. A text block is set like the headline, in words of its
+   own; an image block shows an upload in its box with its fit; the logo shows an
+   upload instead of the kit's file when the layout names one. Every place, size,
+   colour, face and file arrives from the renderer, so nothing here names a brand.
+   The canvas colour shows around the photo's box, and around a photo that is
+   fitted whole. */
 body {
   padding: 0;
 {%- if background %}
@@ -38,21 +41,40 @@ body {
 .shade,
 .headline,
 .subline,
+.text,
+.image,
 .logo {
   position: absolute;
+}
+
+/* The designer's own words, set like the headline: its tracking, tight lines, balanced. */
+.text {
+  letter-spacing: var(--headline-tracking);
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+/* An upload fills its box as its fit says; the box gives both its width and its height. */
+.image {
+  display: block;
+  max-width: none;
 }
 {% endblock %}
 {% block body %}
 <div class="photo"><img src="{{ photo_url }}" alt=""></div>
 {% for block in blocks -%}
 {% if block.kind == "shade" -%}
-<div class="shade" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; height: {{ block.height }}%; background: {{ block.hex }}; opacity: {{ block.opacity }}"></div>
+<div class="shade" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; height: {{ block.height }}%; background: {{ block.hex }}; opacity: {{ block.opacity }}; z-index: {{ loop.index }}"></div>
 {% elif block.kind == "headline" -%}
-<h1 class="headline" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; font-size: {{ block.px }}px; font-family: {{ block.family }}; font-weight: {{ block.weight }};{% if block.italic %} font-style: italic;{% endif %} color: {{ block.hex }}; text-align: {{ block.align }}; margin: 0; max-width: none">{{ headline }}</h1>
+<h1 class="headline" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; font-size: {{ block.px }}px; font-family: {{ block.family }}; font-weight: {{ block.weight }};{% if block.italic %} font-style: italic;{% endif %} color: {{ block.hex }}; text-align: {{ block.align }}; margin: 0; max-width: none; z-index: {{ loop.index }}">{{ headline }}</h1>
 {% elif block.kind == "subline" -%}
-<p class="subline" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; font-size: {{ block.px }}px; font-family: {{ block.family }}; font-weight: {{ block.weight }};{% if block.italic %} font-style: italic;{% endif %} color: {{ block.hex }}; text-align: {{ block.align }}; margin: 0; max-width: none">{{ subline }}</p>
+<p class="subline" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; font-size: {{ block.px }}px; font-family: {{ block.family }}; font-weight: {{ block.weight }};{% if block.italic %} font-style: italic;{% endif %} color: {{ block.hex }}; text-align: {{ block.align }}; margin: 0; max-width: none; z-index: {{ loop.index }}">{{ subline }}</p>
+{% elif block.kind == "text" -%}
+<p class="text" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; font-size: {{ block.px }}px; font-family: {{ block.family }}; font-weight: {{ block.weight }};{% if block.italic %} font-style: italic;{% endif %} color: {{ block.hex }}; text-align: {{ block.align }}; margin: 0; max-width: none; z-index: {{ loop.index }}">{{ block.text }}</p>
+{% elif block.kind == "image" -%}
+<img class="image" src="{{ block.src }}" alt="" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; height: {{ block.height }}%; object-fit: {{ block.fit }}; opacity: {{ block.opacity }}; z-index: {{ loop.index }}">
 {% else -%}
-<img class="logo" src="{{ logo_url }}" alt="" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%">
+<img class="logo" src="{{ block.src or logo_url }}" alt="" style="left: {{ block.left }}%; top: {{ block.top }}%; width: {{ block.width }}%; z-index: {{ loop.index }}">
 {% endif -%}
 {% endfor %}
 {% endblock %}

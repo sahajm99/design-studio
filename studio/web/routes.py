@@ -54,6 +54,7 @@ from studio.contracts import (
     StudioSession,
     TextAlign,
     TextPosition,
+    Upload,
     new_id,
     now,
 )
@@ -79,9 +80,18 @@ from studio.render import (
     face_named,
     shortlist,
 )
+from studio.render.custom import upload_file
 from studio.render.faces import Face
 from studio.store import Store
 from studio.web.jobs import RunJobs
+from studio.web.uploads import (
+    MAX_UPLOAD_BYTES,
+    UPLOAD_REFUSED,
+    UploadRejected,
+    read_image_upload,
+    save_brand_upload,
+    upload_extension,
+)
 from studio.workflows import (
     Deps,
     directions_alike,
@@ -191,12 +201,7 @@ _SESSION_BUSY = "The session is busy."
 # The photo prompt of the version the editor saves for a session that has none yet.
 _EDITOR_PHOTO_PROMPT = "The chosen photo, kept as it is."
 
-_MAX_UPLOAD_BYTES = 15 * 1024 * 1024
-_MAX_UPLOAD_PIXELS = 40_000_000
-_UPLOAD_REFUSED = "That file is not an image the studio can use."
-# The formats an upload may be, as Pillow names them, and the extension each is saved with.
-# A phone's multi-picture JPEG opens as "MPO"; it is a JPEG file all the same.
-_UPLOAD_EXTENSIONS: dict[str, str] = {"PNG": "png", "JPEG": "jpg", "MPO": "jpg"}
+# The upload checks (size, type, pixels) and their message live in studio/web/uploads.py.
 
 # A library upload's refused file, one sentence each after "{n} refused: ".
 _FILE_REFUSED = "{name} is not an image the studio can use."
@@ -584,6 +589,8 @@ def _library_context(
         "refused_text": refused_text,
         "quality_bar": _quality_bar_view(deps),
         "quality_bar_error": quality_bar_error,
+        # v5: the brand's shelf of uploads, newest first, under the quality bar.
+        "uploads": deps.store.list_uploads(deps.kit.id),
     }
 
 
@@ -1402,29 +1409,16 @@ def _save_editor_words(
     session.current_prompt_version_id = version.id
 
 
-def _upload_extension(data: bytes) -> str | None:
-    """The extension an uploaded photo is saved with, or None when the studio cannot use it.
-
-    A file over the size limit is refused, and so is anything Pillow does not open as a
-    PNG or a JPEG, a photo of more than 40 million pixels, and a file whose data fails
-    Pillow's check.
-    """
-    if len(data) > _MAX_UPLOAD_BYTES:
-        return None
-    try:
-        with Image.open(io.BytesIO(data)) as image:
-            extension = _UPLOAD_EXTENSIONS.get(image.format or "")
-            width, height = image.size
-        if extension is None or width * height > _MAX_UPLOAD_PIXELS:
-            return None
-        # Pillow checks a file's data on an image opened for that alone.
-        with Image.open(io.BytesIO(data)) as image:
-            image.verify()
-    except Exception:
-        # Pillow raises many kinds of error for a file it cannot read, a decompression bomb
-        # among them; each means the same here.
-        return None
-    return extension
+def _upload_entry(upload: Upload) -> dict[str, Any]:
+    """An upload as the editor's picker reads it: its id, its address under /media/, its name
+    and its size in pixels."""
+    return {
+        "id": upload.id,
+        "url": f"/media/{upload.image_path}",
+        "name": upload.name,
+        "width": upload.width,
+        "height": upload.height,
+    }
 
 
 def _next_upload_index(store: Store, session: StudioSession) -> int:
@@ -1895,7 +1889,9 @@ async def editor_preview(
     session.active_run_id = run.id
     store.save_session(session)
 
-    guarded, guardrail_lines = apply_guardrails(body.layout, deps.kit, body.mode)
+    guarded, guardrail_lines = apply_guardrails(
+        body.layout, deps.kit, body.mode, uploads_root=store.uploads_dir
+    )
     composition = Composition(template="custom", custom=guarded)
     candidates = await run_compose(deps, run, session, sample, compositions=[composition])
     if not candidates:
@@ -1931,13 +1927,13 @@ async def upload_photo(
     store = deps.store
     session = _require_session(store, session_id)
     # Reading one byte past the limit is enough to tell a file that is too large.
-    data = await photo.read(_MAX_UPLOAD_BYTES + 1)
-    extension = _upload_extension(data)
+    data = await photo.read(MAX_UPLOAD_BYTES + 1)
+    extension = upload_extension(data)
     if extension is None:
         return _page(
             request,
             "session.html",
-            _session_context(deps, session, error=_UPLOAD_REFUSED),
+            _session_context(deps, session, error=UPLOAD_REFUSED),
             status_code=400,
         )
 
@@ -2128,13 +2124,13 @@ async def start_in_editor(
         return RedirectResponse(url="/editor", status_code=303)
 
     # Reading one byte past the limit is enough to tell a file that is too large.
-    data = await photo.read(_MAX_UPLOAD_BYTES + 1)
-    extension = _upload_extension(data)
+    data = await photo.read(MAX_UPLOAD_BYTES + 1)
+    extension = upload_extension(data)
     if extension is None:
         return _page(
             request,
             "editor_picker.html",
-            _editor_picker_context(store, error=_UPLOAD_REFUSED),
+            _editor_picker_context(store, error=UPLOAD_REFUSED),
             status_code=400,
         )
     session = StudioSession(brand_id=deps.kit.id, brief="")
@@ -2142,6 +2138,66 @@ async def start_in_editor(
     upload = _save_upload(store, session, data, extension)
     copy = pick_source_photo(store, session, upload, None)
     return _editor_redirect(session, copy)
+
+
+@router.post("/editor/upload")
+async def editor_upload(request: Request, image: Annotated[UploadFile, File()]) -> JSONResponse:
+    """Keep the designer's image on the brand's shelf, for the editor to place.
+
+    Gives back its id, address, name and size in pixels; a file the studio cannot use gives
+    a 400 with the reason, which the editor shows.
+    """
+    deps: Deps = request.app.state.deps
+    try:
+        data, extension, width, height = await read_image_upload(image)
+    except UploadRejected as rejected:
+        return JSONResponse({"error": str(rejected)}, status_code=400)
+    upload = save_brand_upload(
+        deps.store,
+        deps.kit.id,
+        name=Path(image.filename or "").name,
+        data=data,
+        extension=extension,
+        width=width,
+        height=height,
+        source="editor",
+    )
+    return JSONResponse(_upload_entry(upload))
+
+
+@router.get("/api/uploads")
+async def brand_uploads(request: Request) -> JSONResponse:
+    """The brand's uploads, newest first, for the editor's picker."""
+    deps: Deps = request.app.state.deps
+    uploads = deps.store.list_uploads(deps.kit.id)
+    return JSONResponse(
+        {
+            "uploads": [
+                {**_upload_entry(upload), "created_at": upload.created_at.isoformat()}
+                for upload in uploads
+            ]
+        }
+    )
+
+
+@router.post("/uploads/{upload_id}/remove")
+async def remove_upload(request: Request, upload_id: str) -> RedirectResponse:
+    """Take an upload off the brand's shelf: its file, then its row, and back to the Library.
+
+    A saved post that places it keeps its rendered picture, but a later render leaves the
+    image out, as the Library's hint says.
+    """
+    deps: Deps = request.app.state.deps
+    store = deps.store
+    upload = store.get_upload(upload_id)
+    if upload is None or upload.brand_id != deps.kit.id:
+        raise _not_found()
+    # Only a file in the brand's uploads folder is deleted, whatever path the row holds.
+    path = upload_file(upload.image_path, store.uploads_dir, upload.brand_id)
+    if path is not None:
+        path.unlink(missing_ok=True)
+    store.delete_upload(upload.id)
+    return RedirectResponse(url="/library#uploads", status_code=303)
 
 
 @router.get("/runs")
@@ -2259,10 +2315,10 @@ async def upload_references(
     for image in images:
         name = Path(image.filename or "").name
         # Reading one byte past the limit is enough to tell a file that is too large.
-        data = await image.read(_MAX_UPLOAD_BYTES + 1)
+        data = await image.read(MAX_UPLOAD_BYTES + 1)
         if not name and not data:
             continue  # the empty part a browser sends when no file was chosen
-        extension = _upload_extension(data)
+        extension = upload_extension(data)
         if extension is None:
             refused.append(name or "Untitled")
             continue
@@ -2309,15 +2365,15 @@ async def upload_quality_bar(request: Request, image: Annotated[UploadFile, File
     """
     deps: Deps = request.app.state.deps
     # Reading one byte past the limit is enough to tell a file that is too large.
-    data = await image.read(_MAX_UPLOAD_BYTES + 1)
+    data = await image.read(MAX_UPLOAD_BYTES + 1)
     label = Path(image.filename or "").name or _QUALITY_BAR_UPLOAD_LABEL
-    usable = _upload_extension(data) is not None
+    usable = upload_extension(data) is not None
     if not usable or not await _set_quality_bar(deps.store, data, "upload", label):
         analysis_job: AnalysisJob = request.app.state.analysis_job
         return _page(
             request,
             "library.html",
-            _library_context(deps, analysis_job, quality_bar_error=_UPLOAD_REFUSED),
+            _library_context(deps, analysis_job, quality_bar_error=UPLOAD_REFUSED),
             status_code=400,
         )
     return RedirectResponse(url="/library", status_code=303)

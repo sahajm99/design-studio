@@ -2,9 +2,10 @@
 
 Every object is stored as one row: a few plain columns used for filtering
 and ordering, plus a `json` column holding the full `model_dump_json()`,
-read back with `model_validate_json()`. Each call opens its own short-lived
-connection and closes it before returning; there is no long-running
-connection and no WAL mode.
+read back with `model_validate_json()`. The v5 tables, the brand's uploads and
+the session references, keep each field in a column of its own instead. Each
+call opens its own short-lived connection and closes it before returning; there
+is no long-running connection and no WAL mode.
 """
 
 from __future__ import annotations
@@ -34,9 +35,11 @@ from studio.contracts import (
     RunStatus,
     Sample,
     SampleStatus,
+    SessionReference,
     StepStatus,
     StudioSession,
     StyleCard,
+    Upload,
     now,
 )
 
@@ -195,6 +198,35 @@ class Store:
             )
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, json TEXT NOT NULL)"
+            )
+            # v5: the images the designer uploaded under the brand, and the references a
+            # session carries. A reference's card is its StyleCard as JSON, or NULL.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS uploads (
+                    id TEXT PRIMARY KEY,
+                    brand_id TEXT,
+                    image_path TEXT,
+                    name TEXT,
+                    width INTEGER,
+                    height INTEGER,
+                    source TEXT,
+                    created_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_references (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    upload_id TEXT,
+                    image_path TEXT,
+                    note TEXT,
+                    card TEXT,
+                    created_at TEXT
+                )
+                """
             )
 
     @contextmanager
@@ -858,7 +890,136 @@ class Store:
         data = self.get_setting(_search_credits_key())
         return int((data or {}).get("credits") or 0)
 
+    # ---------------------------------------------------- the brand's uploads (v5)
+
+    def add_upload(self, upload: Upload) -> None:
+        """Record an upload whose file is already under the brand's uploads folder."""
+        with self._connect() as conn:
+            conn.execute(
+                f"INSERT OR REPLACE INTO uploads ({_UPLOAD_COLUMNS}) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    upload.id,
+                    upload.brand_id,
+                    upload.image_path,
+                    upload.name,
+                    upload.width,
+                    upload.height,
+                    upload.source,
+                    _timestamp(upload.created_at),
+                ),
+            )
+
+    def get_upload(self, upload_id: str) -> Upload | None:
+        """The upload with this id, or None when there is none."""
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {_UPLOAD_COLUMNS} FROM uploads WHERE id = ?", (upload_id,)
+            ).fetchone()
+        return _upload_from_row(row) if row else None
+
+    def list_uploads(self, brand_id: str) -> list[Upload]:
+        """The brand's uploads, newest first; two made in the same instant, the later one first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {_UPLOAD_COLUMNS} FROM uploads WHERE brand_id = ? "
+                "ORDER BY created_at DESC, rowid DESC",
+                (brand_id,),
+            ).fetchall()
+        return [_upload_from_row(row) for row in rows]
+
+    def delete_upload(self, upload_id: str) -> None:
+        """Delete the upload's row. The caller removes its file. Not an error when it is gone."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
+
+    # ------------------------------------------------- session references (v5)
+
+    def add_session_reference(self, reference: SessionReference) -> None:
+        """Record a reference on its session."""
+        with self._connect() as conn:
+            conn.execute(
+                f"INSERT OR REPLACE INTO session_references ({_REFERENCE_COLUMNS}) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    reference.id,
+                    reference.session_id,
+                    reference.upload_id,
+                    reference.image_path,
+                    reference.note,
+                    _card_json(reference.card),
+                    _timestamp(reference.created_at),
+                ),
+            )
+
+    def list_session_references(self, session_id: str) -> list[SessionReference]:
+        """The session's references, oldest first, so they keep the order they were given in."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {_REFERENCE_COLUMNS} FROM session_references WHERE session_id = ? "
+                "ORDER BY created_at ASC, rowid ASC",
+                (session_id,),
+            ).fetchall()
+        return [_reference_from_row(row) for row in rows]
+
+    def update_session_reference(self, reference: SessionReference) -> None:
+        """Save a reference's note and card; its other fields never change."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE session_references SET note = ?, card = ? WHERE id = ?",
+                (reference.note, _card_json(reference.card), reference.id),
+            )
+
+    def delete_session_reference(self, reference_id: str) -> None:
+        """Delete a reference's row. Its upload stays on the brand's shelf."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM session_references WHERE id = ?", (reference_id,))
+
 
 def _search_credits_key() -> str:
     """The settings key for this UTC month's search credits, e.g. `search_credits:2026-10`."""
     return f"search_credits:{now():%Y-%m}"
+
+
+# The v5 tables' columns, in the order their rows are written and read.
+_UPLOAD_COLUMNS = "id, brand_id, image_path, name, width, height, source, created_at"
+_REFERENCE_COLUMNS = "id, session_id, upload_id, image_path, note, card, created_at"
+
+
+def _timestamp(moment: datetime) -> str:
+    """A moment as the v5 tables keep it: ISO 8601 with microseconds, so the text sorts in time."""
+    return moment.isoformat(timespec="microseconds")
+
+
+def _card_json(card: StyleCard | None) -> str | None:
+    """A reference's card as its JSON, or None for a reference without one."""
+    return card.model_dump_json() if card is not None else None
+
+
+def _upload_from_row(row: tuple) -> Upload:
+    """An uploads row, in `_UPLOAD_COLUMNS` order, as an Upload."""
+    upload_id, brand_id, image_path, name, width, height, source, created_at = row
+    return Upload(
+        id=upload_id,
+        brand_id=brand_id,
+        image_path=image_path,
+        name=name or "",
+        width=width or 0,
+        height=height or 0,
+        source=source,
+        created_at=datetime.fromisoformat(created_at),
+    )
+
+
+def _reference_from_row(row: tuple) -> SessionReference:
+    """A session_references row, in `_REFERENCE_COLUMNS` order, as a SessionReference."""
+    reference_id, session_id, upload_id, image_path, note, card, created_at = row
+    return SessionReference(
+        id=reference_id,
+        session_id=session_id,
+        upload_id=upload_id,
+        image_path=image_path,
+        note=note or "",
+        card=StyleCard.model_validate_json(card) if card else None,
+        created_at=datetime.fromisoformat(created_at),
+    )
