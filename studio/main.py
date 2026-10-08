@@ -1,14 +1,16 @@
 """Builds the studio's web app: every dependency, wired together, behind one FastAPI app.
 
 `create_app` itself does nothing heavy; it only reads settings and builds the
-FastAPI object. The store, the brand kit, the model, the photo provider, the search
-provider and the renderer are all built in the app's lifespan, which runs once when
-the app starts and tears them down when it stops.
+FastAPI object, with the request guards in front of it. The store, the brand kit, the
+model, the photo registry (the model catalogue, checked here, so a bad one stops the
+studio), the search provider and the renderer are all built in the app's lifespan, which
+runs once when the app starts and tears them down when it stops.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,15 +25,21 @@ from studio.library.analysis import AnalysisJob
 from studio.library.base import ImageFetcher
 from studio.library.fetch import HttpImageFetcher
 from studio.models import get_llm
-from studio.photos import get_photo_provider
+from studio.photos.catalogue import load_catalogue
+from studio.photos.registry import PhotoRegistry
 from studio.render import Renderer
 from studio.research import get_search_provider
+from studio.secrets import load_secret
 from studio.store import Store
+from studio.web.guard import LocalOnlyGuard
 from studio.web.jobs import RunJobs
 from studio.web.routes import router
 from studio.workflows import Deps, analyse_reference
 
 STATIC_DIR = Path(__file__).parent / "web" / "static"
+# The HTTP clients' own loggers, kept at WARNING so request addresses and headers never reach
+# the log (v6).
+_QUIET_LOGGERS = ("httpx", "httpcore")
 
 # Generous enough to cover every session a local, single-brand studio keeps.
 _SESSION_SCAN_LIMIT = 10_000
@@ -86,7 +94,8 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
 
         kit = load_brand_kit(settings.brands_dir, settings.brand_id)
         llm = get_llm(settings)
-        photo_provider = get_photo_provider(settings)
+        # v6: every image model, from the catalogue, with the keys from .env and the saved ones.
+        photos = PhotoRegistry(load_catalogue(), settings, store, secret=load_secret(settings))
         # A custom layout's image blocks and an uploaded logo must be files in the uploads folder.
         renderer = Renderer(store.work_dir, uploads_root=store.uploads_dir)
         await renderer.start()
@@ -96,7 +105,7 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
             store=store,
             kit=kit,
             llm=llm,
-            photo_provider=photo_provider,
+            photos=photos,
             renderer=renderer,
             search_provider=get_search_provider(settings),
         )
@@ -124,7 +133,12 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
             if aclose is not None:
                 await aclose()
 
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
     app = FastAPI(title="Design Studio", lifespan=lifespan)
+    # v6: only this computer's names, and only the studio's own pages may change things.
+    app.add_middleware(LocalOnlyGuard, port=settings.port)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(router)
     return app

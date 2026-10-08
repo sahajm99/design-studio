@@ -127,6 +127,8 @@ _MAX_COMMENT_CHARS = 2000
 _MAX_HASHTAGS = 8
 _PROMPT_EXCERPT_CHARS = 90
 _NOT_FOUND = "Not found."
+# v6: today's spend on the Studio page, "Spent today: $0.14".
+SPENT = "${spent:.2f}"
 
 STEP_LABELS: dict[str, str] = {
     "load_context": "Gather context",
@@ -369,7 +371,7 @@ def _base_context(request: Request) -> dict[str, Any]:
     return {
         "brand_name": deps.kit.name,
         "demo_mode": deps.settings.demo_mode,
-        "has_photo_source": deps.photo_provider is not None,
+        "has_photo_source": deps.photos.has_photo_source(),
         "chrome_tokens": chrome_tokens(deps.kit),
         # The kit's family, served by /brand/font; its italic file is optional.
         "brand_font": deps.kit.typography.family,
@@ -408,6 +410,18 @@ def _midnight_utc() -> datetime:
 
 def _clamp_sample_count(raw: int, max_samples: int) -> int:
     return max(1, min(max_samples, raw))
+
+
+def _photo_model_choice(deps: Deps, raw: str | None) -> str | None:
+    """The photo model a form asked for (v6): a catalogue id, or "" for the studio's default.
+    None when the form named none, or named a model the studio does not know, so the session
+    keeps its own. A known model without a key is kept: its round says what it used instead."""
+    if raw is None:
+        return None
+    chosen = raw.strip()
+    if chosen and deps.photos.model(chosen) is None:
+        return None
+    return chosen
 
 
 def _auto_settings(max_rounds: int, photo_budget: int, stop_score: float) -> AutoSettings:
@@ -584,6 +598,8 @@ def _studio_context(deps: Deps, *, error: str | None = None, brief_value: str = 
         "posts": deps.store.list_posts(),
         "sessions": deps.store.list_sessions(),
         "photos_today": deps.store.count_photos_since(_midnight_utc()),
+        # v6: what today's photos cost, across every provider.
+        "spent_today": SPENT.format(spent=deps.store.spend_since(_midnight_utc())),
         # v4: "Research first" and the month's searches, unless the kit turns research off.
         "research_enabled": deps.kit.research.enabled,
         "searches_this_month": deps.store.search_credits_this_month(),
@@ -1200,6 +1216,12 @@ def _session_context(
         "show_reset": latest_agent_version is not None,
         "max_samples": deps.settings.max_samples,
         "rounds": rounds,
+        # v6: each sample's model and cost, by sample id; none for uploads and old samples.
+        "sample_badges": {
+            sample.id: deps.photos.badge(sample)
+            for round_group in rounds
+            for sample in round_group["samples"]
+        },
         "post": store.get_post(session.post_id) if session.post_id else None,
         "is_running": is_running,
         "active_status": _active_run_status(active_run, session),
@@ -1720,6 +1742,7 @@ async def create_session(
     research: Annotated[bool | None, Form()] = None,
     research_choice: Annotated[bool, Form()] = False,
     references: Annotated[list[UploadFile] | None, File()] = None,
+    photo_model_id: Annotated[str | None, Form()] = None,
 ) -> Response:
     """Start a session from the brief: a draft by hand, or the whole session on its own in auto mode.
 
@@ -1731,7 +1754,8 @@ async def create_session(
 
     The reference images (v5) are kept on the session before its first run starts, so every
     agent of that run sees them; files past the sixth, and files the studio cannot use, are
-    left out and the session page's status line says so.
+    left out and the session page's status line says so. `photo_model_id` (v6) sets the
+    session's photo model; without it, the session uses the studio's default.
     """
     deps: Deps = request.app.state.deps
     stripped = brief.strip()
@@ -1750,6 +1774,7 @@ async def create_session(
         brief=stripped[:_MAX_BRIEF_CHARS],
         sample_count=_clamp_sample_count(sample_count, deps.settings.max_samples),
         research_on=wanted and deps.kit.research.enabled,
+        photo_model_id=_photo_model_choice(deps, photo_model_id) or "",
     )
     if mode == "auto":
         session.mode = "auto"
@@ -1956,11 +1981,16 @@ async def generate_samples_route(
     mode: Annotated[Mode, Form()] = "dark",
     layout: Annotated[LayoutId, Form()] = "hero",
     sample_count: Annotated[int, Form()] = 3,
+    photo_model_id: Annotated[str | None, Form()] = None,
 ) -> Response:
     deps: Deps = request.app.state.deps
     session = _require_session(deps.store, session_id)
     if _session_busy(deps.store, session):
         return RedirectResponse(url=f"/sessions/{session.id}", status_code=303)
+    # v6: the model this round, and "Generate again", use; saved on the session.
+    chosen_model = _photo_model_choice(deps, photo_model_id)
+    if chosen_model is not None:
+        session.photo_model_id = chosen_model
     current = (
         deps.store.get_prompt_version(session.current_prompt_version_id)
         if session.current_prompt_version_id
@@ -2053,12 +2083,18 @@ async def submit_round_feedback(request: Request, session_id: str, text: Annotat
 
 @router.post("/sessions/{session_id}/again")
 async def generate_again(
-    request: Request, session_id: str, text: Annotated[str, Form()] = ""
+    request: Request,
+    session_id: str,
+    text: Annotated[str, Form()] = "",
+    photo_model_id: Annotated[str | None, Form()] = None,
 ) -> Response:
     deps: Deps = request.app.state.deps
     session = _require_session(deps.store, session_id)
     if _session_busy(deps.store, session):
         return RedirectResponse(url=f"/sessions/{session.id}", status_code=303)
+    chosen_model = _photo_model_choice(deps, photo_model_id)
+    if chosen_model is not None:
+        session.photo_model_id = chosen_model
 
     stripped = text.strip()[:_MAX_COMMENT_CHARS]
     if stripped:

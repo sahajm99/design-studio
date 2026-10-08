@@ -38,6 +38,8 @@ from studio.store import Store
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BRANDS_DIR = REPO_ROOT / "brands"
+# The studio answers only to localhost names with its port (v6), so the clients use one.
+STUDIO_URL = "http://localhost:8000"
 
 
 class FakeFetcher:
@@ -85,7 +87,9 @@ def client(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TestClient]:
         brands_dir=BRANDS_DIR,
         brand_id="hybridge",
     )
-    with TestClient(create_app(settings, fetcher=FakeFetcher())) as test_client:
+    with TestClient(
+        create_app(settings, fetcher=FakeFetcher()), base_url=STUDIO_URL
+    ) as test_client:
         yield test_client
 
 
@@ -116,7 +120,7 @@ def test_demo_banner_is_shown(client: TestClient) -> None:
 
 
 def test_import_board_adds_references(settings: Settings) -> None:
-    with TestClient(create_app(settings, fetcher=FakeFetcher())) as client:
+    with TestClient(create_app(settings, fetcher=FakeFetcher()), base_url=STUDIO_URL) as client:
         kit = client.app.state.deps.kit
         expected = len(BoardHtmlSource(Path(kit.root) / kit.inspiration_board).items())
 
@@ -130,7 +134,7 @@ def test_import_board_adds_references(settings: Settings) -> None:
 
 
 def test_choice_updates_the_taste(settings: Settings) -> None:
-    with TestClient(create_app(settings, fetcher=FakeFetcher())) as client:
+    with TestClient(create_app(settings, fetcher=FakeFetcher()), base_url=STUDIO_URL) as client:
         store = client.app.state.store
         store.inbox_dir.joinpath("sample.jpg").write_bytes(b"stand-in bytes, never decoded as an image")
 
@@ -148,12 +152,14 @@ def test_choice_updates_the_taste(settings: Settings) -> None:
 
 
 def test_choice_survives_restart(settings: Settings) -> None:
-    with TestClient(create_app(settings, fetcher=FakeFetcher())) as client:
+    with TestClient(create_app(settings, fetcher=FakeFetcher()), base_url=STUDIO_URL) as client:
         client.app.state.store.upsert_reference(Reference(id="keep-1", source="test", label="Keep me"))
         response = client.post("/api/references/keep-1/choice", json={"choice": "liked"})
         assert response.status_code == 200
 
-    with TestClient(create_app(settings, fetcher=FakeFetcher())) as second_client:
+    with TestClient(
+        create_app(settings, fetcher=FakeFetcher()), base_url=STUDIO_URL
+    ) as second_client:
         _wait_for_analysis_idle(second_client)  # start-up re-analyses the still-pending reference
 
         assert second_client.app.state.store.get_reference("keep-1").choice == "liked"
@@ -189,7 +195,7 @@ def test_interrupted_runs_are_marked_on_startup(settings: Settings) -> None:
     setup_store.init()
     run = setup_store.create_run("create", "hybridge", brief="Left running by a crash")
 
-    with TestClient(create_app(settings, fetcher=FakeFetcher())) as client:
+    with TestClient(create_app(settings, fetcher=FakeFetcher()), base_url=STUDIO_URL) as client:
         response = client.get(f"/api/runs/{run.id}")
 
         assert response.status_code == 200

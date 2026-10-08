@@ -1,0 +1,93 @@
+# The image models the studio can offer, as data (v6). A new model of a provider the studio
+# already knows is one entry here; a new provider is one adapter file under studio/photos/.
+#
+# Prices are list prices, checked on the date in `checked`. The studio records the actual cost
+# where the provider reports usage, and the list price otherwise. An entry whose price was not
+# checked has `checked: ""` and no list price, and the studio says so instead of guessing.
+#
+# Fields: id (the provider's own model id), provider (cloudflare, openai or google), label,
+# price_basis (free_allowance, usage or list_price), list_price_usd (a photo, at the preset),
+# output_token_price_usd (a token, for usage-priced models), options (the preset),
+# option_choices (what Settings may change the preset to), option_prices (the list price for
+# each choice of an option that changes it), max_parallel (photos asked for at once) and checked.
+
+models:
+  - id: "@cf/black-forest-labs/flux-2-klein-4b"
+    provider: cloudflare
+    label: FLUX.2 klein
+    price_basis: free_allowance
+    # Every photo of a round at once, as v5 asked for them.
+    max_parallel: 6
+    checked: "2026-10-08"
+
+  - id: gpt-image-2.5-flare
+    provider: openai
+    label: GPT Image 2.5 Flare
+    price_basis: usage
+    list_price_usd: 0.05            # measured $0.048 for 1088 x 1360 at high quality
+    output_token_price_usd: 0.00003 # $30 per million output tokens
+    options: {quality: high}
+    option_choices: {quality: [low, medium, high]}
+    checked: "2026-10-08"
+
+  - id: gpt-image-2.5-sunburst
+    provider: openai
+    label: GPT Image 2.5 Sunburst
+    price_basis: usage
+    list_price_usd: 0.05
+    output_token_price_usd: 0.00003
+    options: {quality: high}
+    option_choices: {quality: [low, medium, high]}
+    checked: "2026-10-08"
+
+  - id: gpt-image-2
+    provider: openai
+    label: GPT Image 2
+    price_basis: usage
+    list_price_usd: 0.05
+    output_token_price_usd: 0.00003
+    options: {quality: high}
+    option_choices: {quality: [low, medium, high]}
+    checked: "2026-10-08"
+
+  - id: gpt-image-1-mini
+    provider: openai
+    label: GPT Image 1 mini
+    price_basis: usage
+    # The GPT Image 1 models take only fixed sizes, so the portrait one is the preset.
+    options: {quality: medium, size: 1024x1536}
+    option_choices: {quality: [low, medium, high]}
+    checked: ""                     # lower than the others; check before enabling
+
+  - id: gemini-nano-banana-2.1
+    provider: google
+    label: Nano Banana 2.1
+    price_basis: list_price
+    list_price_usd: 0.0504
+    options: {image_size: 2K}
+    option_choices: {image_size: [1K, 2K]}
+    option_prices: {image_size: {1K: 0.0336, 2K: 0.0504}}
+    checked: "2026-10-08"
+
+  - id: gemini-3.1-flash-image
+    provider: google
+    label: Nano Banana 2
+    price_basis: list_price
+    list_price_usd: 0.067
+    options: {image_size: 1K}
+    checked: "2026-10-08"
+
+  - id: gemini-3.1-flash-lite-image
+    provider: google
+    label: Nano Banana 2 Lite
+    price_basis: list_price
+    options: {image_size: 1K}
+    checked: ""                     # check before enabling
+
+  - id: gemini-3-pro-image
+    provider: google
+    label: Nano Banana Pro
+    price_basis: list_price
+    list_price_usd: 0.134
+    options: {image_size: 1K}
+    checked: "2026-10-08"

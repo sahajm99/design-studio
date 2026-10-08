@@ -692,19 +692,35 @@ class Store:
             ).fetchall()
         return [Sample.model_validate_json(row[0]) for row in rows]
 
-    def count_photos_since(self, since: datetime) -> int:
+    def count_photos_since(self, since: datetime, provider: str | None = None) -> int:
         """Count of samples with an image, including deleted ones, created at or after `since`.
 
-        Photos the designer uploaded are left out: the count is of photos made.
+        Photos the designer uploaded are left out: the count is of photos made. With
+        `provider` ("openai"), only that provider's photos are counted (v6).
         """
+        clause, params = _provider_clause(provider)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM samples "
                 "WHERE created_at >= ? AND json_extract(json, '$.image_path') IS NOT NULL "
-                "AND json_extract(json, '$.provider') != 'upload'",
-                (since.timestamp(),),
+                f"AND json_extract(json, '$.provider') != 'upload'{clause}",
+                (since.timestamp(), *params),
             ).fetchone()
         return row[0]
+
+    def spend_since(self, since: datetime, provider: str | None = None) -> float:
+        """What the photos made at or after `since` cost, in dollars, deleted ones included: the
+        money was spent. A photo whose cost is not known adds nothing. With `provider`
+        ("google"), only that provider's photos (v6)."""
+        clause, params = _provider_clause(provider)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(json_extract(json, '$.cost_usd')), 0) FROM samples "
+                "WHERE created_at >= ? AND json_extract(json, '$.image_path') IS NOT NULL "
+                f"AND json_extract(json, '$.cost_usd') IS NOT NULL{clause}",
+                (since.timestamp(), *params),
+            ).fetchone()
+        return float(row[0] or 0.0)
 
     def _require_sample(self, sample_id: str) -> Sample:
         sample = self.get_sample(sample_id)
@@ -988,6 +1004,18 @@ class Store:
 def _search_credits_key() -> str:
     """The settings key for this UTC month's search credits, e.g. `search_credits:2026-10`."""
     return f"search_credits:{now():%Y-%m}"
+
+
+def _provider_clause(provider: str | None) -> tuple[str, tuple[str, ...]]:
+    """The SQL that keeps one provider's samples, and its parameters: a sample's provider is
+    the provider's id ("fake") or starts with it and a colon ("openai:gpt-image-2"). Nothing
+    without a provider."""
+    if not provider:
+        return "", ()
+    return (
+        " AND (json_extract(json, '$.provider') = ? OR json_extract(json, '$.provider') LIKE ?)",
+        (provider, f"{provider}:%"),
+    )
 
 
 # The v5 tables' columns, in the order their rows are written and read.

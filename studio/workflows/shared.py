@@ -41,7 +41,7 @@ from studio.contracts import (
     new_id,
 )
 from studio.media import agent_picture
-from studio.photos.base import PhotoProvider
+from studio.photos.registry import PhotoRegistry
 from studio.render import CUSTOM_DOES_NOT_FIT, Renderer
 from studio.research.base import SearchProvider
 from studio.store import Store
@@ -114,7 +114,8 @@ class Deps:
     store: Store
     kit: BrandKit
     llm: BaseLlm
-    photo_provider: PhotoProvider | None
+    # v6: every image model, its key and its limits; a round asks it for the session's model.
+    photos: PhotoRegistry
     renderer: Renderer
     # v4: the web search the scout runs through; None when research has no provider.
     search_provider: SearchProvider | None = None

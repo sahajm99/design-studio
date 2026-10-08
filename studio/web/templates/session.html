@@ -451,6 +451,9 @@
         </div>
 
         <div class="sample-body">
+          {#- v6: the model that made the photo and its cost; none for uploads and old samples. #}
+          {% set model_badge = sample_badges.get(sample.id) if sample_badges is defined else "" %}
+          {% if model_badge %}<p class="badge sample-model">{{ model_badge }}</p>{% endif %}
           {% if sample.recommended %}<p class="card-flag">Recommended</p>{% endif %}
           {% if sample.review %}
           <p class="sample-verdict" title="{{ sample.review.suggested_change }}">{{ sample.review.verdict }}</p>

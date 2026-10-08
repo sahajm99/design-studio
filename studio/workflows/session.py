@@ -43,7 +43,9 @@ from studio.contracts import (
 )
 from studio.library.taste import build_taste_profile
 from studio.models import banned_terms, describe_llm
-from studio.photos.base import PhotoUnavailable
+from studio.photos.base import LimitReached, PhotoProvider, PhotoUnavailable
+from studio.photos.catalogue import ImageModel
+from studio.photos.letterbox import trim_letterbox
 from studio.render import allowed_templates
 from studio.store import Store
 from studio.workflows.agents import build_critic, build_critic_ranker, build_prompt_writer
@@ -87,6 +89,10 @@ _MAX_SEED = 2**31 - 1
 ANSWER_UNUSABLE = "The model's answer could not be used."
 NO_PHOTO_PROVIDER = "No photo provider is configured."
 PHOTO_SERVICE_FAILED = "The photo service failed."
+# The generate_samples step's note (v6): the round's count and its total cost.
+ROUND_MADE = "{made} of {count} made · {cost}"
+NONE_MADE = "0 of {count} made"
+LETTERBOX_TRIMMED = "Trimmed a letterbox off {photos}."
 CRITIC_FAILED = "The critic could not score this sample."
 SOURCE_PHOTO_MISSING = "The photo this session started from is no longer available."
 CHOSEN_PHOTO = "The chosen photo."
@@ -454,7 +460,7 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
     async def load_prompt() -> Event:
         async with recorder.step("load_prompt") as info:
             version = current_version(store, session)
-            if deps.photo_provider is None:
+            if not deps.photos.has_photo_source():
                 raise ValueError(NO_PHOTO_PROVIDER)
             info.note = f"Version {version.number}."
             data = version.model_dump(mode="json")
@@ -525,22 +531,34 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
 async def _make_samples(
     deps: Deps, session: StudioSession, version: PromptVersion, count: int | None, info: StepInfo
 ) -> list[Sample]:
-    """The round's photos, all asked for at once, each with a seed of its own.
+    """The round's photos from the session's model, each with a seed of its own.
+
+    The registry turns the session's model id into the model and its adapter (v6); a model that
+    can no longer be used gives way to the default, and the step's note says so. At most the
+    model's `max_parallel` photos are asked for at once, and before each paid photo the
+    registry checks the daily limits: a photo over a limit is not asked for, and its sample
+    carries the limit's message. A letterbox the model painted is trimmed off.
 
     The round holds `count` photos, or the session's sample count when `count` is None, and
-    never more than one round may ask for. The step's note counts the photos as they land. A
-    sample that could not be made is kept with the reason. When none could be made the step
-    fails with the first reason, and no sample is kept. When the run is stopped, the photos
-    still on their way are abandoned and the samples that finished are kept as a partial
-    round.
+    never more than one round may ask for. The step's note counts the photos as they land, and
+    ends with the round's total cost. A sample that could not be made is kept with the reason.
+    When none could be made the step fails with the first reason, and no sample is kept. When
+    the run is stopped, the photos still on their way are abandoned and the samples that
+    finished are kept as a partial round.
     """
-    provider = deps.photo_provider  # load_prompt has made sure there is one
+    registry = deps.photos
+    resolved = registry.resolve(session.photo_model_id)
+    model = resolved.model
+    adapter = registry.adapter_for(model.id)
+    options = registry.options_for(model)
     wanted = count if count is not None else session.sample_count
     count = max(1, min(wanted, deps.settings.max_samples))
     round_number = session.rounds + 1
     prompt = with_backdrop(version.photo_prompt, version.mode, deps.kit, version.layout)
     size = deps.kit.post_size
-    info.provider = provider.name
+    info.provider = registry.describe(model, options)
+    gate = asyncio.Semaphore(model.max_parallel)
+    trimmed: list[int] = []
 
     async def make(index: int) -> Sample:
         sample = Sample(
@@ -549,24 +567,15 @@ async def _make_samples(
             round=round_number,
             index=index,
             seed=random.randint(1, _MAX_SEED),
+            model_id=model.id,
         )
         out_path = deps.store.samples_dir / session.id / f"{round_number}-{index}.png"
-        try:
-            result = await provider.generate(
-                prompt, size.width, size.height, out_path, seed=sample.seed
+        async with gate:
+            photo = await _ask_for_photo(
+                deps, adapter, model, options, sample, prompt, (size.width, size.height), out_path
             )
-        except PhotoUnavailable as error:
-            # The message is written for the designer and holds no key, so it is logged in full.
-            logger.warning("Photo %s-%s failed: %s", round_number, index, error)
-            sample.error = str(error).strip() or PHOTO_SERVICE_FAILED
-            return sample
-        except Exception as error:
-            # Only the type: the text of an unexpected error may hold a request address.
-            logger.warning("The photo provider failed with %s", type(error).__name__)
-            sample.error = PHOTO_SERVICE_FAILED
-            return sample
-        sample.image_path = deps.store.relative(Path(result.path))
-        sample.provider = result.provider
+        if photo is not None and await asyncio.to_thread(trim_letterbox, photo):
+            trimmed.append(index)
         return sample
 
     tasks = [asyncio.create_task(make(index)) for index in range(1, count + 1)]
@@ -584,11 +593,66 @@ async def _make_samples(
         raise
     samples = sorted(landed, key=lambda sample: sample.index)
     made = [sample for sample in samples if sample.image_path]
-    info.provider = made[0].provider if made else provider.name
-    info.note = f"{len(made)} of {plural(count, 'sample')} made."
+    total = (
+        ROUND_MADE.format(made=len(made), count=count, cost=registry.round_cost(made))
+        if made
+        else NONE_MADE.format(count=count)
+    )
+    lines = [resolved.note] if resolved.note else []
+    if trimmed:
+        lines.append(LETTERBOX_TRIMMED.format(photos=plural(len(trimmed), "photo")))
+    info.note = " ".join([*lines, total])
     if not made:
         raise PhotoUnavailable(samples[0].error or PHOTO_SERVICE_FAILED)
     return samples
+
+
+async def _ask_for_photo(
+    deps: Deps,
+    adapter: PhotoProvider,
+    model: ImageModel,
+    options: dict[str, str],
+    sample: Sample,
+    prompt: str,
+    size: tuple[int, int],
+    out_path: Path,
+) -> Path | None:
+    """Ask the model for the sample's photo and fill the sample in: its photo, provider and
+    cost, or the reason it has none. Returns the photo's file, or None.
+
+    A paid photo over a daily limit is not asked for. The registry counts a paid photo from
+    the moment it is asked for, so photos asked for at once cannot together pass a limit.
+    """
+    registry = deps.photos
+    try:
+        registry.hold(sample, model, options)
+    except LimitReached as error:
+        sample.error = str(error)
+        return None
+    try:
+        result = await adapter.generate(
+            prompt, size[0], size[1], out_path, model=model, options=options, seed=sample.seed
+        )
+    except PhotoUnavailable as error:
+        # Written for the designer, and every known key is taken out before it is kept.
+        message = registry.redact(str(error)).strip()
+        logger.warning("Photo %s-%s failed: %s", sample.round, sample.index, message)
+        sample.error = message or PHOTO_SERVICE_FAILED
+        return None
+    except Exception as error:
+        # Only the type: the text of an unexpected error may hold a request address.
+        logger.warning("The photo provider failed with %s", type(error).__name__)
+        sample.error = PHOTO_SERVICE_FAILED
+        return None
+    else:
+        photo = Path(result.path)
+        sample.image_path = deps.store.relative(photo)
+        sample.provider = result.provider
+        sample.cost_usd = result.cost_usd
+        sample.cost_basis = result.cost_basis
+        return photo
+    finally:
+        registry.record(sample)
 
 
 def _made(samples: list[Sample]) -> int:

@@ -34,7 +34,8 @@ from studio.contracts import (
     StyleCard,
 )
 from studio.models import FakeLlm
-from studio.photos.fake import FakePhotoProvider
+from studio.photos.catalogue import load_catalogue
+from studio.photos.registry import PhotoRegistry
 from studio.render import Renderer
 from studio.store import Store
 from studio.workflows import (
@@ -72,7 +73,8 @@ def deps(settings: Settings, store: Store, hybridge_kit: BrandKit, renderer: Ren
         store=store,
         kit=hybridge_kit,
         llm=FakeLlm(),
-        photo_provider=FakePhotoProvider(),
+        # Demo settings, so the stand-in makes every model's photos.
+        photos=PhotoRegistry(load_catalogue(), settings, store),
         renderer=renderer,
     )
 

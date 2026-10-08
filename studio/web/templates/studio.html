@@ -11,7 +11,7 @@
 <section class="panel">
   <form method="post" action="/sessions" enctype="multipart/form-data" class="brief-form studio-form">
     <p class="meta studio-counts">
-      <span>Photos made today: <span class="tabular">{{ photos_today }}</span></span>
+      <span>Photos made today: <span class="tabular">{{ photos_today }}</span>{% if spent_today is defined %} · Spent today: <span class="tabular">{{ spent_today }}</span>{% endif %}</span>
       {% if research_enabled %}<span>Searches this month: <span class="tabular">{{ searches_this_month }} of {{ search_limit }}</span></span>{% endif %}
     </p>
     {% if error %}

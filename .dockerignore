@@ -1,5 +1,7 @@
 .git
 .env
+secret.key
+**/secret.key
 data
 .superpowers
 __pycache__

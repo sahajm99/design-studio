@@ -26,6 +26,16 @@ class Settings(BaseModel):
     cloudflare_api_token: str = ""
     cloudflare_image_model: str = "@cf/black-forest-labs/flux-2-klein-4b"
 
+    # v6: paid image models on the designer's own keys. A key saved on the Settings page wins
+    # over these; the Google image key is not GOOGLE_API_KEY, so the text calls stay free.
+    openai_api_key: str = ""
+    google_image_api_key: str = ""
+    # The Fernet key that encrypts saved keys; without one, the studio makes one beside the
+    # database on first start.
+    secret_key: str = ""
+
+    # An override for tests and demos: "fake" makes every model's photos with the stand-in,
+    # "none" turns photos off. "auto" uses the stand-in in demo mode and the real models else.
     photo_provider: Literal["auto", "cloudflare", "fake", "none"] = "auto"
     analyse_per_minute: int = 10
     max_samples: int = 6  # the most photos one round may ask for
@@ -34,6 +44,10 @@ class Settings(BaseModel):
     tavily_api_key: str = ""
     research_provider: Literal["auto", "tavily", "fake", "none"] = "auto"
     research_monthly_limit: int = 900  # search credits the studio will spend in a month
+
+    # v6: the port the browser reaches the studio on. The request guards answer only to
+    # localhost names with this port (docker-compose.yml publishes 127.0.0.1:8000).
+    port: int = 8000
 
     @property
     def demo_mode(self) -> bool:
@@ -76,6 +90,10 @@ class Settings(BaseModel):
             cloudflare_image_model=get(
                 "STUDIO_CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-2-klein-4b"
             ),
+            openai_api_key=get("OPENAI_API_KEY"),
+            google_image_api_key=get("GOOGLE_IMAGE_API_KEY"),
+            secret_key=get("STUDIO_SECRET_KEY"),
+            port=int(get("STUDIO_PORT", "8000")),
             photo_provider=get("STUDIO_PHOTO_PROVIDER", "auto"),  # type: ignore[arg-type]
             analyse_per_minute=int(get("STUDIO_ANALYSE_PER_MINUTE", "10")),
             max_samples=int(get("STUDIO_MAX_SAMPLES", "6")),

@@ -448,6 +448,35 @@ class RunEvent(BaseModel):
     error: str | None = None
 
 
+# ------------------------------------------------------------ photo models (v6)
+
+# Who makes a photo: a provider is one adapter, each of its models one catalogue entry.
+ProviderId = Literal["cloudflare", "openai", "google", "fake"]
+# How a photo's cost is known: a free allowance, the usage the provider reports, or a list price.
+PriceBasis = Literal["free_allowance", "usage", "list_price"]
+# The models a fresh studio offers by default, and the one it starts with: the free one.
+DEFAULT_PHOTO_MODEL_ID = "@cf/black-forest-labs/flux-2-klein-4b"
+
+
+def _default_photo_limits() -> dict[ProviderId, int]:
+    return {"openai": 30, "google": 30}
+
+
+class PhotoSettings(BaseModel):
+    """The studio's choices about image models, stored as plain JSON under `photo_settings`.
+
+    Studio-wide, not per brand. An empty `enabled_model_ids` offers every catalogue model whose
+    provider has a key. Days for the limits are UTC days.
+    """
+
+    default_model_id: str = DEFAULT_PHOTO_MODEL_ID
+    enabled_model_ids: list[str] = Field(default_factory=list)
+    options: dict[str, dict[str, str]] = Field(default_factory=dict)  # per model id: the overrides
+    daily_photo_limit: dict[ProviderId, int] = Field(default_factory=_default_photo_limits)
+    daily_spend_limit_usd: float = 2.0
+    auto_fallback_to_default: bool = True
+
+
 # ------------------------------------------------------------ sessions (v2)
 
 SessionStatus = Literal["needs_brief", "choosing", "drafted", "generating", "reviewing", "composing", "finished"]
@@ -596,6 +625,11 @@ class Sample(BaseModel):
     index: int
     image_path: str | None = None  # relative to the data folder; None when generation failed
     provider: str = ""
+    # v6: the catalogue model asked for and what its photo cost. Old samples have none, and
+    # cost_usd is None when the cost is not known.
+    model_id: str = ""
+    cost_usd: float | None = None
+    cost_basis: PriceBasis | None = None
     seed: int | None = None
     error: str | None = None  # why generation failed
     review: SampleReview | None = None
@@ -791,6 +825,8 @@ class StudioSession(BaseModel):
     recommended_direction: int | None = None
     recommended_reason: str = ""
     chosen_direction: Direction | None = None  # a copy, with the designer's edits
+    # v6: the catalogue model this session's rounds use; empty means the studio's default.
+    photo_model_id: str = ""
     created_at: datetime = Field(default_factory=now)
     updated_at: datetime = Field(default_factory=now)
 

@@ -2279,6 +2279,11 @@ details.panel[open] > summary {
   color: var(--ink-faint);
 }
 
+/* v6: the model and the cost on a sample card, a neutral badge whose figures line up. */
+.sample-model {
+  font-variant-numeric: tabular-nums;
+}
+
 .sample-rank {
   color: var(--ink);
   font-size: 12.5px;

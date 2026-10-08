@@ -8,7 +8,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from studio.photos.base import PhotoResult
+from studio.photos.base import DEMO_KEY_CHECK, KeyCheck, PhotoResult
+from studio.photos.catalogue import ImageModel
 
 _HEX_COLOUR_RE = re.compile(r"#([0-9A-Fa-f]{6})")
 
@@ -19,17 +20,38 @@ class FakePhotoProvider:
     The same prompt and seed always draw the same photo, so demo-mode runs
     and tests are reproducible without a network call. A different seed
     draws a different photo for the same prompt.
+
+    v6: in demo mode it stands in for every model in the catalogue. Its photos say which model
+    was asked for, cost nothing and carry the `fake` provider id, and its key check calls no one.
     """
 
     name = "fake"
 
     async def generate(
-        self, prompt: str, width: int, height: int, out_path: Path, *, seed: int | None = None
+        self,
+        prompt: str,
+        width: int,
+        height: int,
+        out_path: Path,
+        *,
+        model: ImageModel | None = None,
+        options: dict[str, str] | None = None,
+        seed: int | None = None,
     ) -> PhotoResult:
         image = _draw(prompt, width, height, seed)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(out_path, format="PNG")
-        return PhotoResult(path=str(out_path), provider=self.name, prompt=prompt)
+        return PhotoResult(
+            path=str(out_path),
+            provider=self.name,
+            model_id=model.id if model is not None else "",
+            prompt=prompt,
+            cost_usd=0.0,
+            cost_basis="free_allowance",
+        )
+
+    async def test_key(self) -> KeyCheck:
+        return KeyCheck(ok=True, message=DEMO_KEY_CHECK)
 
 
 def _draw(prompt: str, width: int, height: int, seed: int | None = None) -> Image.Image:
