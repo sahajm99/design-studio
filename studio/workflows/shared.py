@@ -60,6 +60,9 @@ _MAX_PROMPT_WORDS = 120
 _FIXED_ENDING = "No text, no logos, no watermarks."
 # A word that ends a sentence, closing quotes or brackets allowed after the mark.
 _SENTENCE_END_RE = re.compile(r"[.!?][\"')\]]*$")
+# Tags that would close an agent's context block early if text from outside the kit carried
+# them: the web's, or the designer's own words.
+_CONTEXT_TAG_RE = re.compile(r"</?\s*context\s*>", re.IGNORECASE)
 # The kit's own quality bar, inside its brand folder.
 _IDEAL_EXAMPLE = Path("examples") / "ideal-output.png"
 # The setting that holds the designer's quality bar (v3.1).
@@ -461,6 +464,13 @@ def trim_prompt(prompt: str) -> tuple[str, bool]:
 def mentions(text: str, term: str) -> bool:
     """Whether the text holds the term as whole words, in any case."""
     return re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE) is not None
+
+
+def quoted(text: str) -> str:
+    """Text from outside the kit, as it may sit inside a context block: without context tags,
+    so it cannot end the block early. The scout quotes the web's text with it, and the edit
+    run the designer's words."""
+    return _CONTEXT_TAG_RE.sub("", text)
 
 
 def clean_hashtags(hashtags: list[str]) -> list[str]:

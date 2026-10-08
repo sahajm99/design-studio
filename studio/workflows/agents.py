@@ -3,7 +3,8 @@ photo prompt and the words, the critic judges one generated photo, the critic's 
 compares every photo of a round at once, the judge decides whether a round is good enough
 to compose, and the final checker compares the composed layouts and picks the one to ship.
 Before the draft (v4), the scout plans web searches and writes the research from their
-results, and the direction writer turns the research into three directions.
+results, and the direction writer turns the research into three directions. In the editor
+(v5), the editor answers the designer's request with edits to the layout, or a question.
 
 Each agent's instruction is its prompt followed by one context block (`wrap_context`),
 which the fake model and the real model read the same way. The instructions are built
@@ -20,6 +21,7 @@ from google.adk.models.base_llm import BaseLlm
 
 from studio.contracts import (
     DirectionSet,
+    EditorAnswer,
     FinalReview,
     PromptDraft,
     RoundJudgement,
@@ -34,6 +36,7 @@ from studio.models import (
     ROLE_CRITIC,
     ROLE_CRITIC_RANK,
     ROLE_DIRECTIONS,
+    ROLE_EDITOR,
     ROLE_FINAL_CHECK,
     ROLE_JUDGE,
     ROLE_PROMPT_WRITER,
@@ -320,6 +323,33 @@ DIRECTIONS_PROMPT = "\n".join(
     ]
 )
 
+EDITOR_PROMPT = "\n".join(
+    [
+        "You change the layout of one social post the way the designer asks, for the brand "
+        "named in the context below.",
+        "The request arrives as the message, followed by a picture of the layout as it is "
+        "now, and, when the designer uploaded a file, that file after the line naming it.",
+        "The context holds layout, the blocks numbered from 0 with their kind, words, box in "
+        "percent of the canvas and style; the brand's palette and fonts; the post's words; "
+        "and upload_id when a file was uploaded.",
+        "Answer with edits: the fewest operations that do what was asked, in order, each "
+        "naming a block by its number. Keep everything the request does not name.",
+        "The operations are move, resize, set_text, set_style, replace_image, add_text, "
+        "add_image, add_shade, delete, reorder, set_photo and set_background. Boxes are "
+        "percent of the canvas; sizes in pixels; colours are palette names.",
+        "The headline and the subline are the post's words: change them with set_text on their "
+        "blocks, in sentence case, at most eight and eighteen words.",
+        "Change the logo to the uploaded file with replace_image on the logo block, keeping "
+        "its box. Never delete the logo.",
+        "Keep the brand's rules: sentence case, the palette's colours only, the kit's fonts "
+        "or the studio faces listed.",
+        "Judge positions from the picture: left is small x, top is small y.",
+        "When the request names something that is not on the canvas, or could mean two "
+        "things, set usable to false and ask one question in question.",
+        "Write summary as one sentence saying what changed.",
+    ]
+)
+
 
 def build_analyst(llm: BaseLlm, label: str = "") -> LlmAgent:
     """The analyst, who describes one reference image as a style card."""
@@ -432,6 +462,18 @@ def build_direction_writer(llm: BaseLlm) -> LlmAgent:
     )
 
 
+def build_editor_agent(llm: BaseLlm) -> LlmAgent:
+    """The editor (v5), who answers the designer's request with edits to the layout, or a
+    question."""
+    return LlmAgent(
+        name="editor",
+        model=llm,
+        instruction=_editor_instruction,
+        output_schema=EditorAnswer,
+        output_key="editor_answer",
+    )
+
+
 def _prompt_writer_instruction(ctx: ReadonlyContext) -> str:
     """The prompt, the run's context and, after a rejected answer, the reason it was rejected.
 
@@ -486,6 +528,14 @@ def _directions_instruction(ctx: ReadonlyContext) -> str:
     material) and, after a rejected answer, the reason."""
     parts = [DIRECTIONS_PROMPT, wrap_context(ROLE_DIRECTIONS, ctx.state["directions_context"])]
     return "\n\n".join([*parts, *_rejected(ctx.state.get("directions_retry_note"))])
+
+
+def _editor_instruction(ctx: ReadonlyContext) -> str:
+    """The prompt, the editor's context (the layout's numbered blocks, the brand's palette and
+    fonts, the post's words and, when a file came with the request, its upload id) and, after
+    a rejected answer, the reason."""
+    parts = [EDITOR_PROMPT, wrap_context(ROLE_EDITOR, ctx.state["editor_context"])]
+    return "\n\n".join([*parts, *_rejected(ctx.state.get("editor_retry_note"))])
 
 
 def _rejected(retry_note: str | None) -> list[str]:

@@ -51,158 +51,182 @@
     </figure>
   </div>
 
-  <div class="panel editor-panel">
-    <div class="editor-words">
-      <div class="field">
-        <label for="editor-headline">Headline</label>
-        <input type="text" id="editor-headline" name="headline" value="{{ headline }}" data-editor-word="headline" />
-      </div>
-      <div class="field">
-        <label for="editor-subline">Subline</label>
-        <input type="text" id="editor-subline" name="subline" value="{{ subline }}" data-editor-word="subline" />
-      </div>
-    </div>
+  {#- The settings column: Ask on top, then the chosen block's settings. #}
+  <div class="editor-side">
+    <section class="panel editor-ask" aria-labelledby="editor-ask-title" data-editor-ask>
+      <h2 class="section-title" id="editor-ask-title">Ask</h2>
+      <form class="editor-ask-form" data-editor-ask-form>
+        <div class="field">
+          <label for="editor-ask-request">What to change</label>
+          <input type="text" id="editor-ask-request" maxlength="300" autocomplete="off" placeholder="Make the headline smaller and move it up." data-editor-ask-request />
+        </div>
+        <div class="field">
+          <label for="editor-ask-file">A file, if the change needs one</label>
+          <input type="file" id="editor-ask-file" accept="image/png,image/jpeg" data-editor-ask-file />
+          <p class="hint">A PNG or a JPEG, up to 15 MB, such as a new logo.</p>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn" data-editor-ask-apply>Apply</button>
+          <button type="button" class="btn" data-editor-ask-undo hidden>Undo</button>
+        </div>
+        <p class="meta editor-ask-line" role="status" data-editor-ask-line hidden></p>
+        <p class="field-error" role="alert" data-editor-ask-error hidden></p>
+      </form>
+    </section>
 
-    <div class="editor-group">
-      <h2 class="section-title" data-editor-block-name hidden></h2>
-      <p class="hint" data-editor-no-block>Choose a block on the canvas.</p>
-      <div class="editor-part" data-editor-for="text" hidden>
-        <div class="field" data-editor-for-kind="text" hidden>
-          <label for="editor-text">Words</label>
-          <input type="text" id="editor-text" maxlength="200" autocomplete="off" data-editor-text />
+    <div class="panel editor-panel">
+      <div class="editor-words">
+        <div class="field">
+          <label for="editor-headline">Headline</label>
+          <input type="text" id="editor-headline" name="headline" value="{{ headline }}" data-editor-word="headline" />
         </div>
         <div class="field">
-          <label for="editor-font">Font</label>
-          <select id="editor-font" data-editor-font>
-            {%- for face in editor_data.faces %}
-            <option value="{{ face.name }}">{{ face.name }}</option>
-            {%- endfor %}
-          </select>
+          <label for="editor-subline">Subline</label>
+          <input type="text" id="editor-subline" name="subline" value="{{ subline }}" data-editor-word="subline" />
         </div>
+      </div>
+
+      <div class="editor-group">
+        <h2 class="section-title" data-editor-block-name hidden></h2>
+        <p class="hint" data-editor-no-block>Choose a block on the canvas.</p>
+        <div class="editor-part" data-editor-for="text" hidden>
+          <div class="field" data-editor-for-kind="text" hidden>
+            <label for="editor-text">Words</label>
+            <input type="text" id="editor-text" maxlength="200" autocomplete="off" data-editor-text />
+          </div>
+          <div class="field">
+            <label for="editor-font">Font</label>
+            <select id="editor-font" data-editor-font>
+              {%- for face in editor_data.faces %}
+              <option value="{{ face.name }}">{{ face.name }}</option>
+              {%- endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="editor-weight">Weight</label>
+            <select id="editor-weight" data-editor-weight>
+              <option value="0">Brand default</option>
+              <option value="100">100 Thin</option>
+              <option value="200">200 Extra light</option>
+              <option value="300">300 Light</option>
+              <option value="400">400 Regular</option>
+              <option value="500">500 Medium</option>
+              <option value="600">600 Semibold</option>
+              <option value="700">700 Bold</option>
+              <option value="800">800 Extra bold</option>
+              <option value="900">900 Black</option>
+            </select>
+          </div>
+          <div class="editor-italic">
+            <label class="editor-toggle"><input type="checkbox" data-editor-italic /><span>Italic</span></label>
+            <p class="hint" data-editor-no-italic hidden>No italic for this face</p>
+          </div>
+          <div class="field">
+            <label for="editor-size">Size</label>
+            <div class="editor-number">
+              <input type="number" id="editor-size" min="12" max="400" step="1" data-editor-size />
+              <span class="hint">px</span>
+            </div>
+          </div>
+          <fieldset class="pill-group">
+            <legend>Alignment</legend>
+            <span class="segmented">
+              <label class="pill-option"><input type="radio" name="align" value="left" /><span>Left</span></label>
+              <label class="pill-option"><input type="radio" name="align" value="centre" /><span>Centre</span></label>
+            </span>
+          </fieldset>
+        </div>
+        <div class="editor-part" data-editor-for="text shade" hidden>
+          {{ swatches("colour", "Colour", palette) }}
+        </div>
+        <div class="editor-part" data-editor-for="shade" hidden>
+          <div class="field">
+            <label for="editor-opacity">Opacity</label>
+            <input type="range" id="editor-opacity" min="0" max="1" step="0.05" data-editor-opacity />
+          </div>
+          <button type="button" class="btn btn-small" data-editor-remove-shade>Remove the shade</button>
+        </div>
+        <div class="editor-part" data-editor-for="image" hidden>
+          <fieldset class="pill-group">
+            <legend>Fit</legend>
+            <span class="segmented">
+              <label class="pill-option"><input type="radio" name="image_fit" value="contain" /><span>Contain</span></label>
+              <label class="pill-option"><input type="radio" name="image_fit" value="cover" /><span>Cover</span></label>
+            </span>
+          </fieldset>
+          <label class="editor-toggle"><input type="checkbox" data-editor-keep-aspect /><span>Keep aspect</span></label>
+          <div class="field">
+            <label for="editor-image-opacity">Opacity</label>
+            <input type="number" id="editor-image-opacity" min="0" max="1" step="0.05" data-editor-image-opacity />
+          </div>
+        </div>
+        <div class="editor-part" data-editor-for="photo" hidden>
+          <fieldset class="pill-group">
+            <legend>Fit</legend>
+            <span class="segmented">
+              <label class="pill-option"><input type="radio" name="photo_fit" value="cover" /><span>Cover</span></label>
+              <label class="pill-option"><input type="radio" name="photo_fit" value="contain" /><span>Contain</span></label>
+            </span>
+          </fieldset>
+          <div class="pan-pad" role="group" aria-label="Move the photo">
+            <button type="button" class="btn" data-pan="up" aria-label="Move the photo up">&uarr;</button>
+            <button type="button" class="btn" data-pan="left" aria-label="Move the photo left">&larr;</button>
+            <button type="button" class="btn" data-pan="right" aria-label="Move the photo right">&rarr;</button>
+            <button type="button" class="btn" data-pan="down" aria-label="Move the photo down">&darr;</button>
+          </div>
+          <button type="button" class="btn btn-small" data-editor-fill>Fill the canvas</button>
+          {{ swatches("background", "Background colour", palette) }}
+        </div>
+        {#- The designer's own blocks and the shades change their place in the list, which is
+            the order they are drawn in; a shade keeps its own Remove above. #}
+        <div class="editor-part" data-editor-for-kind="text image shade" hidden>
+          <div class="actions editor-order">
+            <button type="button" class="btn btn-small" data-editor-forward>Bring forward</button>
+            <button type="button" class="btn btn-small" data-editor-back>Send back</button>
+            <button type="button" class="btn btn-small" data-editor-delete data-editor-for-kind="text image">Delete</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-group">
+        <div class="actions editor-add">
+          <button type="button" class="btn btn-small" data-editor-add-shade>Add a shade</button>
+          <button type="button" class="btn btn-small" data-editor-add-text>Add text</button>
+          <button type="button" class="btn btn-small" data-editor-add-image aria-expanded="false" aria-controls="editor-uploads">Add image</button>
+        </div>
+        <div class="inset editor-uploads" id="editor-uploads" data-editor-uploads hidden>
+          <div class="upload-form">
+            <label for="editor-upload-file">Upload an image</label>
+            <div class="upload-row">
+              <input type="file" id="editor-upload-file" accept="image/png,image/jpeg" data-editor-upload-file />
+              <button type="button" class="btn btn-small" data-editor-upload-button disabled>Upload</button>
+            </div>
+            <p class="hint">A PNG or a JPEG, up to 15 MB. An uploaded logo is yours to check against the kit's rules.</p>
+            <p class="hint" role="status" data-editor-upload-status hidden></p>
+            <p class="field-error" role="alert" data-editor-upload-error hidden></p>
+          </div>
+          <div class="editor-shelf">
+            <p class="editor-shelf-title">Your uploads</p>
+            <ul class="editor-shelf-grid" data-editor-uploads-list></ul>
+            <p class="hint" data-editor-uploads-empty hidden>Nothing uploaded yet.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-group">
+        <fieldset class="pill-group">
+          <legend>Post mode</legend>
+          <span class="segmented">
+            <label class="pill-option"><input type="radio" name="mode" value="dark" {{ "checked" if mode == "dark" else "" }} /><span>Dark</span></label>
+            <label class="pill-option"><input type="radio" name="mode" value="light" {{ "checked" if mode == "light" else "" }} /><span>Light</span></label>
+          </span>
+        </fieldset>
         <div class="field">
-          <label for="editor-weight">Weight</label>
-          <select id="editor-weight" data-editor-weight>
-            <option value="0">Brand default</option>
-            <option value="100">100 Thin</option>
-            <option value="200">200 Extra light</option>
-            <option value="300">300 Light</option>
-            <option value="400">400 Regular</option>
-            <option value="500">500 Medium</option>
-            <option value="600">600 Semibold</option>
-            <option value="700">700 Bold</option>
-            <option value="800">800 Extra bold</option>
-            <option value="900">900 Black</option>
-          </select>
-        </div>
-        <div class="editor-italic">
-          <label class="editor-toggle"><input type="checkbox" data-editor-italic /><span>Italic</span></label>
-          <p class="hint" data-editor-no-italic hidden>No italic for this face</p>
-        </div>
-        <div class="field">
-          <label for="editor-size">Size</label>
+          <label for="editor-logo-width">Logo width</label>
           <div class="editor-number">
-            <input type="number" id="editor-size" min="12" max="400" step="1" data-editor-size />
-            <span class="hint">px</span>
+            <input type="number" id="editor-logo-width" min="14" max="92" step="1" data-editor-logo-width />
+            <span class="hint">%</span>
           </div>
-        </div>
-        <fieldset class="pill-group">
-          <legend>Alignment</legend>
-          <span class="segmented">
-            <label class="pill-option"><input type="radio" name="align" value="left" /><span>Left</span></label>
-            <label class="pill-option"><input type="radio" name="align" value="centre" /><span>Centre</span></label>
-          </span>
-        </fieldset>
-      </div>
-      <div class="editor-part" data-editor-for="text shade" hidden>
-        {{ swatches("colour", "Colour", palette) }}
-      </div>
-      <div class="editor-part" data-editor-for="shade" hidden>
-        <div class="field">
-          <label for="editor-opacity">Opacity</label>
-          <input type="range" id="editor-opacity" min="0" max="1" step="0.05" data-editor-opacity />
-        </div>
-        <button type="button" class="btn btn-small" data-editor-remove-shade>Remove the shade</button>
-      </div>
-      <div class="editor-part" data-editor-for="image" hidden>
-        <fieldset class="pill-group">
-          <legend>Fit</legend>
-          <span class="segmented">
-            <label class="pill-option"><input type="radio" name="image_fit" value="contain" /><span>Contain</span></label>
-            <label class="pill-option"><input type="radio" name="image_fit" value="cover" /><span>Cover</span></label>
-          </span>
-        </fieldset>
-        <label class="editor-toggle"><input type="checkbox" data-editor-keep-aspect /><span>Keep aspect</span></label>
-        <div class="field">
-          <label for="editor-image-opacity">Opacity</label>
-          <input type="number" id="editor-image-opacity" min="0" max="1" step="0.05" data-editor-image-opacity />
-        </div>
-      </div>
-      <div class="editor-part" data-editor-for="photo" hidden>
-        <fieldset class="pill-group">
-          <legend>Fit</legend>
-          <span class="segmented">
-            <label class="pill-option"><input type="radio" name="photo_fit" value="cover" /><span>Cover</span></label>
-            <label class="pill-option"><input type="radio" name="photo_fit" value="contain" /><span>Contain</span></label>
-          </span>
-        </fieldset>
-        <div class="pan-pad" role="group" aria-label="Move the photo">
-          <button type="button" class="btn" data-pan="up" aria-label="Move the photo up">&uarr;</button>
-          <button type="button" class="btn" data-pan="left" aria-label="Move the photo left">&larr;</button>
-          <button type="button" class="btn" data-pan="right" aria-label="Move the photo right">&rarr;</button>
-          <button type="button" class="btn" data-pan="down" aria-label="Move the photo down">&darr;</button>
-        </div>
-        <button type="button" class="btn btn-small" data-editor-fill>Fill the canvas</button>
-        {{ swatches("background", "Background colour", palette) }}
-      </div>
-      {#- The designer's own blocks and the shades change their place in the list, which is
-          the order they are drawn in; a shade keeps its own Remove above. #}
-      <div class="editor-part" data-editor-for-kind="text image shade" hidden>
-        <div class="actions editor-order">
-          <button type="button" class="btn btn-small" data-editor-forward>Bring forward</button>
-          <button type="button" class="btn btn-small" data-editor-back>Send back</button>
-          <button type="button" class="btn btn-small" data-editor-delete data-editor-for-kind="text image">Delete</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="editor-group">
-      <div class="actions editor-add">
-        <button type="button" class="btn btn-small" data-editor-add-shade>Add a shade</button>
-        <button type="button" class="btn btn-small" data-editor-add-text>Add text</button>
-        <button type="button" class="btn btn-small" data-editor-add-image aria-expanded="false" aria-controls="editor-uploads">Add image</button>
-      </div>
-      <div class="inset editor-uploads" id="editor-uploads" data-editor-uploads hidden>
-        <div class="upload-form">
-          <label for="editor-upload-file">Upload an image</label>
-          <div class="upload-row">
-            <input type="file" id="editor-upload-file" accept="image/png,image/jpeg" data-editor-upload-file />
-            <button type="button" class="btn btn-small" data-editor-upload-button disabled>Upload</button>
-          </div>
-          <p class="hint">A PNG or a JPEG, up to 15 MB. An uploaded logo is yours to check against the kit's rules.</p>
-          <p class="hint" role="status" data-editor-upload-status hidden></p>
-          <p class="field-error" role="alert" data-editor-upload-error hidden></p>
-        </div>
-        <div class="editor-shelf">
-          <p class="editor-shelf-title">Your uploads</p>
-          <ul class="editor-shelf-grid" data-editor-uploads-list></ul>
-          <p class="hint" data-editor-uploads-empty hidden>Nothing uploaded yet.</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="editor-group">
-      <fieldset class="pill-group">
-        <legend>Post mode</legend>
-        <span class="segmented">
-          <label class="pill-option"><input type="radio" name="mode" value="dark" {{ "checked" if mode == "dark" else "" }} /><span>Dark</span></label>
-          <label class="pill-option"><input type="radio" name="mode" value="light" {{ "checked" if mode == "light" else "" }} /><span>Light</span></label>
-        </span>
-      </fieldset>
-      <div class="field">
-        <label for="editor-logo-width">Logo width</label>
-        <div class="editor-number">
-          <input type="number" id="editor-logo-width" min="14" max="92" step="1" data-editor-logo-width />
-          <span class="hint">%</span>
         </div>
       </div>
     </div>

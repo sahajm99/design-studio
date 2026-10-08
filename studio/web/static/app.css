@@ -3219,11 +3219,33 @@ details.panel[open] > summary {
   grid-area: stage;
 }
 
+/* The settings column: the Ask surface over the settings surface (v5). */
+.editor-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  grid-area: panel;
+}
+
 .editor-panel {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  grid-area: panel;
+}
+
+/* Ask (v5): what to change in words, a file when the change needs one, Apply and Undo, and
+   one line on what the editor did, or the question it asks. */
+.editor-ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* A long word in the line wraps rather than widening the column. */
+.editor-ask-line,
+.editor-ask-form .field-error {
+  overflow-wrap: anywhere;
 }
 
 .editor-actions {

@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
 from PIL import Image, ImageOps
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, StringConstraints, ValidationError
 
 from studio.brand import logo_for_mode
 from studio.contracts import (
@@ -33,6 +33,7 @@ from studio.contracts import (
     CustomLayout,
     Direction,
     DirectionFormat,
+    EditorAnswer,
     LayoutCandidate,
     LayoutId,
     LayoutTemplate,
@@ -75,11 +76,13 @@ from studio.library.taste import build_taste_profile
 from studio.render import (
     NEEDS_PHOTO,
     allowed_templates,
+    apply_edits,
     apply_guardrails,
     available_faces,
     blocks_for_template,
     default_layout,
     describe,
+    edited_words,
     face_named,
     shortlist,
 )
@@ -106,6 +109,7 @@ from studio.workflows import (
     run_auto,
     run_compose,
     run_draft,
+    run_edit,
     run_finish,
     run_revise,
     run_revise_prompt,
@@ -159,6 +163,8 @@ STEP_LABELS: dict[str, str] = {
     "propose": "Propose directions",
     "save_directions": "Save the directions",
     "research": "Research",
+    # v5: the editor's Ask mode.
+    "ask_editor": "Ask the editor",
 }
 
 # A step name two kinds of run share, labelled for one of them. The auto run's last step and
@@ -177,6 +183,7 @@ _RUN_KIND_LABELS: dict[str, str] = {
     "compose": "Composing the layout",
     "auto": "Automatic session",
     "scout": "Researching",
+    "edit": "Editing the layout",
 }
 
 # {samples} is the session's sample count with its noun: "1 sample", "3 samples".
@@ -241,6 +248,10 @@ _QUALITY_BAR_RETURN_PAGES = re.compile(
 # The most blocks an editor preview may carry: the page starts with three or four.
 _MAX_EDITOR_BLOCKS = 12
 _TOO_MANY_BLOCKS = "Too many blocks."
+# v5: the editor's Ask mode. A request is one line of at most this many characters, and an
+# editor agent that cannot answer is reported with this line, its run showing why.
+_MAX_ASK_CHARS = 300
+_EDITOR_FAILED = "The editor could not answer."
 
 # The two files a face can have, as /brand/font names them.
 _FontStyle = Literal["regular", "italic"]
@@ -302,6 +313,26 @@ class EditorPreviewBody(BaseModel):
     subline: str
     mode: Mode
     layout: CustomLayout
+
+
+class EditorAskBody(BaseModel):
+    """The editor's Ask (v5): what the designer typed, the layout on the canvas, and the file
+    uploaded with the request, if any, as its upload id. `sample` is the photo the editor
+    works on, the session's chosen one when it is left out; `from`, the layout candidate the
+    editor opened from, comes from the editor's address, and the answer does not depend on it.
+    `headline`, `subline` and `mode` are the editor's own fields, as the preview sends them;
+    the session's current version stands in for any left out."""
+
+    request: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=_MAX_ASK_CHARS)
+    ]
+    layout: CustomLayout
+    upload_id: str | None = None
+    sample: str | None = None
+    from_: str | None = Field(default=None, alias="from")
+    headline: str | None = None
+    subline: str | None = None
+    mode: Mode | None = None
 
 
 # ------------------------------------------------------------------- helpers
@@ -880,9 +911,10 @@ def _failed_run_context(
     """The session's newest run, for a retry callout, when it failed or was interrupted.
 
     A stage of an automatic session stands for the auto run it belongs to, so the callout
-    shows that run's status, error and page.
+    shows that run's status, error and page. The editor's Ask runs (v5) are left out: a
+    failed one is answered in the editor, and a later one must not hide a real failure.
     """
-    runs = store.list_runs_for_session(session.id)
+    runs = [run for run in store.list_runs_for_session(session.id) if run.kind != "edit"]
     run = runs[0] if runs else None
     if run is not None and run.parent_run_id:
         run = store.get_run(run.parent_run_id) or run
@@ -1488,6 +1520,73 @@ def _save_upload(store: Store, session: StudioSession, data: bytes, extension: s
     )
     store.save_sample(sample)
     return sample
+
+
+def _brand_upload(store: Store, brand_id: str, upload_id: str) -> Upload | None:
+    """The brand's upload by its id while its file is still in the brand's uploads folder;
+    None for an unknown id, another brand's upload, or one whose file has gone."""
+    upload = store.get_upload(upload_id) if upload_id else None
+    if upload is None or upload.brand_id != brand_id:
+        return None
+    if upload_file(upload.image_path, store.uploads_dir, brand_id) is None:
+        return None
+    return upload
+
+
+async def _upload_picture(store: Store, upload: Upload) -> Path:
+    """The file the editor agent is sent for an upload (v5): its agent copy, upright and at
+    most 2048 pixels on its longer side, written now when it has none, since an upload can
+    be 15 MB and goes beside the layout's own picture; or the upload itself when no copy can
+    be written. A copy goes with its upload when the upload is removed."""
+    for transparent in (False, True):
+        copy = agent_copy_path(upload.image_path, transparent=transparent)
+        found = upload_file(copy, store.uploads_dir, upload.brand_id)
+        if found is not None:
+            return found
+    try:
+        relative = await asyncio.to_thread(_write_upload_copy, store, upload)
+        return store.media_path(relative)
+    except Exception as error:
+        # Any failure, Pillow's or the disk's, only costs the agent a smaller picture.
+        logger.warning("The agent copy of an upload was not written: %r", error)
+        return store.media_path(upload.image_path)
+
+
+def _write_upload_copy(store: Store, upload: Upload) -> str:
+    """Write an upload's agent copy from its file, and give back the copy's media path.
+    Reading and decoding are blocking work, so this runs off the event loop."""
+    data = store.media_path(upload.image_path).read_bytes()
+    return write_agent_copy(store, upload.image_path, data)
+
+
+def _edited_layout(
+    deps: Deps, layout: CustomLayout, answer: EditorAnswer, mode: Mode
+) -> tuple[CustomLayout, list[str]]:
+    """The layout with the editor agent's edits applied, then the guardrails, and every line
+    saying what was dropped or changed: the edits' own lines first, then the guardrails'.
+
+    An edit can name any of the brand's uploads, each placed with its own proportions."""
+    store, kit = deps.store, deps.kit
+    uploads = {upload.id: upload for upload in store.list_uploads(kit.id)}
+    canvas = kit.post_size
+
+    def upload_path(upload_id: str) -> str | None:
+        upload = uploads.get(upload_id)
+        return upload.image_path if upload is not None else None
+
+    def upload_ratio(upload_id: str) -> float | None:
+        upload = uploads.get(upload_id)
+        if upload is None or not upload.width or not upload.height:
+            return None
+        # Percent runs across the canvas's width and down its height, so a picture's height
+        # for each unit of width, in percent, is its own proportion times the canvas's.
+        return (upload.height / upload.width) * (canvas.width / canvas.height)
+
+    edited, lines = apply_edits(
+        layout, answer.edits, upload_path=upload_path, upload_ratio=upload_ratio
+    )
+    guarded, guardrail_lines = apply_guardrails(edited, kit, mode, uploads_root=store.uploads_dir)
+    return guarded, [*lines, *(line for line in guardrail_lines if line not in lines)]
 
 
 # ------------------------------------------------------- session references (v5)
@@ -2136,6 +2235,77 @@ async def editor_preview(
             "image_url": f"/media/{candidate.image_path}",
             "fits": candidate.render_report.fits,
             "adjustments": candidate.render_report.adjustments,
+            "run_id": run.id,
+        }
+    )
+
+
+@router.post("/sessions/{session_id}/editor/ask")
+async def editor_ask(request: Request, session_id: str, body: EditorAskBody) -> JSONResponse:
+    """The editor's Ask mode (v5): the editor agent answers the designer's request with edits
+    to the layout as sent, or with one question, and waits for it.
+
+    The edit run renders the layout for the agent with the editor's words and mode (the
+    session's saved ones where the page sent none), and records its one step. Code applies
+    the edits to a copy, then the guardrails, and gives back the new layout with the agent's
+    summary and a line for each edit that was dropped or changed. `words` is the headline and
+    the subline when an edit changed either, which the page puts in its fields, else null; a
+    question comes back with the layout as it was. Nothing is saved, and the session keeps no
+    run in flight: the page loads the layout into the canvas, and "Use this layout" saves it
+    after a preview, as before. An upload id that is not the brand's gives a 404; an agent
+    that cannot answer gives a 502, and its run shows why.
+    """
+    deps: Deps = request.app.state.deps
+    store = deps.store
+    if len(body.layout.blocks) > _MAX_EDITOR_BLOCKS:
+        return JSONResponse({"error": _TOO_MANY_BLOCKS}, status_code=422)
+    session = _require_session(store, session_id)
+    sample = _editor_sample(store, session, body.sample or session.picked_sample_id or "")
+    upload = _brand_upload(store, deps.kit.id, body.upload_id) if body.upload_id else None
+    if body.upload_id and upload is None:
+        raise _not_found()
+    version = _current_version(store, session)
+    given = {"headline": body.headline, "subline": body.subline}
+    saved = {"headline": version.headline, "subline": version.subline} if version else {}
+    words = {
+        kind: (text if text is not None else saved.get(kind, "")).strip()
+        for kind, text in given.items()
+    }
+    mode: Mode = body.mode or (version.mode if version else "dark")
+    picture = await _upload_picture(store, upload) if upload is not None else None
+
+    run = store.create_run(
+        "edit", deps.kit.id, brief=session.brief, comment=body.request, session_id=session.id
+    )
+    answer = await run_edit(
+        deps,
+        run,
+        request=body.request,
+        layout=body.layout,
+        words=words,
+        mode=mode,
+        photo=store.media_path(sample.image_path),
+        upload_id=upload.id if upload is not None else "",
+        upload_picture=picture,
+    )
+    if answer is None:
+        return JSONResponse({"error": _EDITOR_FAILED}, status_code=502)
+    layout: CustomLayout = body.layout
+    new_words: dict[str, str] | None = None
+    dropped: list[str] = []
+    if answer.usable:
+        layout, dropped = _edited_layout(deps, body.layout, answer, mode)
+        # The headline's and the subline's words are not in the layout, so they come back
+        # on their own for the page's fields.
+        new_words = edited_words(body.layout, answer.edits, words)
+    return JSONResponse(
+        {
+            "usable": answer.usable,
+            "question": answer.question if not answer.usable else "",
+            "layout": layout.model_dump(mode="json"),
+            "words": new_words,
+            "summary": answer.summary if answer.usable else "",
+            "dropped": dropped,
             "run_id": run.id,
         }
     )

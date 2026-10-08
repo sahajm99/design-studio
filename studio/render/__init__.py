@@ -9,7 +9,13 @@ from studio.render.compose import (
     describe,
     shortlist,
 )
-from studio.render.custom import apply_guardrails, blocks_for_template, default_layout
+from studio.render.custom import (
+    apply_edits,
+    apply_guardrails,
+    blocks_for_template,
+    default_layout,
+    edited_words,
+)
 from studio.render.faces import available_faces, face_named
 from studio.render.renderer import CUSTOM_DOES_NOT_FIT, Renderer, build_html
 
@@ -19,6 +25,7 @@ __all__ = [
     "TEMPLATES",
     "Renderer",
     "allowed_templates",
+    "apply_edits",
     "apply_guardrails",
     "available_faces",
     "blocks_for_template",
@@ -27,6 +34,7 @@ __all__ = [
     "default_composition",
     "default_layout",
     "describe",
+    "edited_words",
     "face_named",
     "shortlist",
 ]

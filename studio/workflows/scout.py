@@ -58,6 +58,7 @@ from studio.workflows.shared import (
     designer_references,
     mentions,
     plural,
+    quoted,
     run_workflow,
     settle,
     text_message,
@@ -76,8 +77,6 @@ _MAX_SOURCES = 10
 _ATTEMPTS = 2
 _MAX_RETRY_NOTE_CHARS = 320
 _RECENT = 10
-# Tags that would close the context block early if web text carried them.
-_CONTEXT_TAG_RE = re.compile(r"</?\s*context\s*>", re.IGNORECASE)
 # A citation in the research prose, such as [3].
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 # The session state keys the scout's and the direction writer's instructions read.
@@ -385,9 +384,9 @@ async def _search(
     results = [
         {
             "number": number,
-            "title": _quoted(result.title),
+            "title": quoted(result.title),
             "domain": result.domain,
-            "snippet": _quoted(result.snippet),
+            "snippet": quoted(result.snippet),
         }
         for number, result in enumerate(found.values(), start=1)
     ]
@@ -677,9 +676,9 @@ def _directions_context(
         # Model text that may echo the web, quoted like the research.
         context["previous_directions"] = [
             {
-                "title": _quoted(direction.title),
+                "title": quoted(direction.title),
                 "format": direction.format,
-                "angle": _quoted(direction.angle),
+                "angle": quoted(direction.angle),
             }
             for direction in session.directions
         ]
@@ -692,9 +691,9 @@ def _directions_context(
 def _research_block(research: ResearchReport) -> dict[str, Any]:
     """The research as the direction writer reads it: the report and its numbered sources."""
     return {
-        "text": _quoted(research.text),
+        "text": quoted(research.text),
         "sources": [
-            {"number": source.number, "title": _quoted(source.title), "domain": source.domain}
+            {"number": source.number, "title": quoted(source.title), "domain": source.domain}
             for source in research.sources
         ],
     }
@@ -761,12 +760,6 @@ async def _ask(
 
 
 # ------------------------------------------------------------------- helpers
-
-
-def _quoted(text: str) -> str:
-    """Web text as it may sit inside a context block: without context tags, so it cannot end
-    the block early."""
-    return _CONTEXT_TAG_RE.sub("", text)
 
 
 def _quoted_list(queries: list[str]) -> str:

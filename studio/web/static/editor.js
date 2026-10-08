@@ -11,7 +11,9 @@
 // nudging keep the words and the logo inside the 4% margin, every shade, image and the
 // photo on the canvas, and the logo at least 14% wide: the rules the renderer applies
 // before it draws (see studio/render/custom.py), so what the designer sees is what the
-// renderer draws. Images come from the brand's uploads, through the inline picker.
+// renderer draws. Images come from the brand's uploads, through the inline picker. The Ask
+// panel (v5) sends what the designer types, with a file when the change needs one, to the
+// editor agent, and loads the layout it answers with, keeping the one before for Undo.
 (() => {
   "use strict";
 
@@ -126,6 +128,12 @@
   const UPLOAD_FAILED = "The image could not be uploaded. Try again.";
   const UPLOADS_FAILED = "Your uploads could not be loaded. Try again.";
   const UNTITLED_UPLOAD = "Untitled";
+  // The Ask panel's line while the editor answers, when it cannot be reached, after edits
+  // that came without a summary, and when the canvas changed before the answer came.
+  const ASK_WORKING = "Working…";
+  const ASK_FAILED = "The editor could not answer. Try again.";
+  const ASK_CHANGED = "The layout was changed.";
+  const ASK_STALE = "The layout changed while the editor answered. Apply again.";
   // The canvas names each face by its place in the list, so no face's own name can clash
   // with a font the page itself uses.
   const FACE_FAMILY = "Editor face";
@@ -136,9 +144,12 @@
   const NONE = -1;
 
   // The page's state: the arrangement and the mode, what is chosen (a block's index,
-  // PHOTO or NONE), how many changes the canvas has had (so a preview knows whether it
-  // still shows it), whether the faces in use have loaded (so the words are measured
-  // in them), and the brand's uploads as the picker last listed them.
+  // PHOTO or NONE), how many changes the canvas has had (so a preview, or the Ask panel's
+  // answer, knows whether it still fits), whether the faces in use have loaded (so the
+  // words are measured in them), the brand's uploads as the picker last listed them, the
+  // arrangement and the words before the Ask panel's last change, which Undo brings back
+  // (null when there is none), and the Ask panel's last upload ({ file, id }), so a file
+  // chosen once goes to the shelf once.
   const editor = {
     data: null,
     layout: null,
@@ -147,6 +158,8 @@
     changes: 0,
     fontLoaded: false,
     uploads: [],
+    undo: null,
+    askUpload: null,
   };
   // The page's elements, found once.
   const ui = {};
@@ -1143,22 +1156,31 @@
     }
   }
 
+  // A file sent to the brand's shelf: the server's entry for it (id, url, name, width and
+  // height), or { error } with the reason when the studio cannot use the file. Throws when
+  // the server cannot be reached. Add image and the Ask panel both send files this way.
+  async function sendUpload(file) {
+    const form = new FormData();
+    form.append("image", file);
+    const response = await fetch("/editor/upload", { method: "POST", body: form });
+    const result = await response.json().catch(() => ({}));
+    if (response.ok) return result;
+    const reason = typeof result.error === "string" && result.error;
+    return { error: reason || UPLOAD_FAILED };
+  }
+
   // The chosen file sent to the brand's shelf, then placed. A file the studio cannot use
   // comes back with the reason, shown under the field.
   async function uploadImage() {
     const file = ui.uploadFile.files[0];
     if (!file || isFull()) return;
-    const form = new FormData();
-    form.append("image", file);
     ui.uploadButton.disabled = true;
     showUploadError("");
     setUploadStatus(UPLOADING);
     try {
-      const response = await fetch("/editor/upload", { method: "POST", body: form });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const reason = typeof result.error === "string" && result.error;
-        showUploadError(reason || UPLOAD_FAILED);
+      const result = await sendUpload(file);
+      if (result.error) {
+        showUploadError(result.error);
         return;
       }
       ui.uploadFile.value = "";
@@ -1249,6 +1271,13 @@
     });
     onNumber(ui.logoWidth, MIN_LOGO, FAR - MARGIN, setLogoWidth);
     ui.previewButton.addEventListener("click", preview);
+    // v5: the Ask panel. Enter in the field applies, as Apply does. Another file chosen is
+    // sent to the shelf afresh.
+    ui.askForm.addEventListener("submit", ask);
+    ui.askUndo.addEventListener("click", undoAsk);
+    ui.askFile.addEventListener("change", () => {
+      editor.askUpload = null;
+    });
   }
 
   // ------------------------------------------------------------ preview
@@ -1324,6 +1353,177 @@
     }
   }
 
+  // ------------------------------------------------------------ the Ask panel (v5)
+
+  // The panel's two lines: what the editor did or asks, and what went wrong; each hidden
+  // when empty.
+  function showAskLine(message) {
+    setText(ui.askLine, message);
+    ui.askLine.hidden = !message;
+  }
+
+  function showAskError(message) {
+    setText(ui.askError, message);
+    ui.askError.hidden = !message;
+  }
+
+  // While the editor answers, the panel waits: nothing in it can be pressed or typed in.
+  function setAskBusy(busy) {
+    [ui.askRequest, ui.askFile, ui.askApply, ui.askUndo].forEach((control) => {
+      control.disabled = busy;
+    });
+  }
+
+  // A whole arrangement loaded into the canvas: the editor's answer, or the one Undo brings
+  // back. It keeps to the renderer's rules as the starting one does; the chosen item stays
+  // chosen while a block of the same kind is at its place; and the canvas counts as changed,
+  // so Use this layout waits for the next preview. The faces it uses load before its words
+  // are measured again.
+  async function loadLayout(layout) {
+    const chosen = selectedItem();
+    editor.layout = layout;
+    editor.layout.blocks.forEach(guard);
+    guardPhoto(editor.layout.photo);
+    if (!paletteHex(editor.layout.background)) editor.layout.background = "";
+    const block = editor.layout.blocks[editor.selected];
+    const same = editor.selected === PHOTO || (block && chosen && block.kind === chosen.kind);
+    editor.selected = same ? editor.selected : NONE;
+    markStale();
+    drawCanvas();
+    syncPanel();
+    await facesLoaded();
+    redraw();
+  }
+
+  // The line after edits: the editor's summary, then each edit that was dropped or changed.
+  function askSummary(result) {
+    const dropped = Array.isArray(result.dropped) ? result.dropped : [];
+    const summary = typeof result.summary === "string" ? result.summary : "";
+    return [summary, ...dropped].filter(Boolean).join(" ") || ASK_CHANGED;
+  }
+
+  // The Headline and Subline fields set from the editor's answer, or from what Undo brings
+  // back; a word the source does not give stays as it is.
+  function setWords(words) {
+    ["headline", "subline"].forEach((kind) => {
+      if (ui.words[kind] && typeof words[kind] === "string") ui.words[kind].value = words[kind];
+    });
+  }
+
+  // The chosen file's id on the brand's shelf: the one it was given when it was sent before,
+  // so answering a question does not send it again, or a new one. Gives back { error } with
+  // the reason when the studio cannot use the file or the server cannot be reached.
+  async function askFileUpload(file) {
+    const last = editor.askUpload;
+    if (last && last.file === file) return { id: last.id };
+    let upload;
+    try {
+      upload = await sendUpload(file);
+    } catch {
+      return { error: UPLOAD_FAILED }; // offline, or the server went away
+    }
+    if (!upload.error) editor.askUpload = { file, id: upload.id };
+    return upload;
+  }
+
+  // Apply: the chosen file, when there is one, goes to the brand's shelf first, then the
+  // request, the canvas's arrangement and the words and mode go to the editor. Its edits
+  // load into the canvas, new words into their fields, the arrangement and the words before
+  // them kept for Undo, and the field clears; a question shows in the line, the request kept
+  // in the field to answer. An answer to a canvas that has changed since is not loaded.
+  // Nothing is saved.
+  async function ask(event) {
+    event.preventDefault();
+    const request = ui.askRequest.value.trim();
+    if (!request) {
+      ui.askRequest.focus();
+      return;
+    }
+    let question = false;
+    setAskBusy(true);
+    showAskError("");
+    showAskLine(ASK_WORKING);
+    try {
+      let uploadId = null;
+      const file = ui.askFile.files[0];
+      if (file) {
+        const upload = await askFileUpload(file);
+        if (upload.error) {
+          showAskLine("");
+          showAskError(upload.error);
+          return;
+        }
+        uploadId = upload.id;
+      }
+      // As for a preview: a change made while the editor answers means its answer is to a
+      // layout that is no longer on the canvas.
+      const sent = editor.changes;
+      const response = await fetch(`/sessions/${editor.data.session_id}/editor/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request,
+          layout: editor.layout,
+          upload_id: uploadId,
+          sample: editor.data.sample_id,
+          from: new URLSearchParams(window.location.search).get("from"),
+          headline: wordsOf("headline"),
+          subline: wordsOf("subline"),
+          mode: editor.mode,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const reason = typeof result.error === "string" && result.error;
+        showAskLine("");
+        showAskError(reason || ASK_FAILED);
+        return;
+      }
+      if (!result.usable) {
+        question = true;
+        showAskLine(result.question);
+        return;
+      }
+      if (editor.changes !== sent) {
+        showAskLine(ASK_STALE);
+        return;
+      }
+      const before = {
+        layout: structuredClone(editor.layout),
+        headline: wordsOf("headline"),
+        subline: wordsOf("subline"),
+      };
+      if (result.words) setWords(result.words);
+      await loadLayout(result.layout);
+      editor.undo = before;
+      ui.askUndo.hidden = false;
+      ui.askRequest.value = "";
+      ui.askFile.value = "";
+      editor.askUpload = null;
+      showAskLine(askSummary(result));
+    } catch {
+      showAskLine("");
+      showAskError(ASK_FAILED); // offline, or the server went away
+    } finally {
+      setAskBusy(false);
+      // A question is answered in the field, so the caret goes back to it.
+      if (question) ui.askRequest.focus();
+    }
+  }
+
+  // Undo puts back the arrangement and the words from before the last change the editor
+  // made, then hides.
+  async function undoAsk() {
+    const undo = editor.undo;
+    if (!undo) return;
+    editor.undo = null;
+    ui.askUndo.hidden = true;
+    showAskLine("");
+    showAskError("");
+    setWords(undo);
+    await loadLayout(undo.layout);
+  }
+
   // ------------------------------------------------------------ start
 
   function findElements(root) {
@@ -1375,6 +1575,13 @@
     ui.stale = root.querySelector("[data-editor-stale]");
     ui.status = root.querySelector("[data-editor-status]");
     ui.error = root.querySelector("[data-editor-error]");
+    ui.askForm = root.querySelector("[data-editor-ask-form]");
+    ui.askRequest = root.querySelector("[data-editor-ask-request]");
+    ui.askFile = root.querySelector("[data-editor-ask-file]");
+    ui.askApply = root.querySelector("[data-editor-ask-apply]");
+    ui.askUndo = root.querySelector("[data-editor-ask-undo]");
+    ui.askLine = root.querySelector("[data-editor-ask-line]");
+    ui.askError = root.querySelector("[data-editor-ask-error]");
   }
 
   // The kit's headline tracking and post size, as the renderer's page sets them. The

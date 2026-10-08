@@ -35,6 +35,8 @@ from studio.contracts import (
     Direction,
     DirectionFormat,
     DirectionSet,
+    EditorAnswer,
+    EditorEdit,
     FinalReview,
     LayoutId,
     LayoutKind,
@@ -61,6 +63,7 @@ ROLE_JUDGE = "judge"
 ROLE_FINAL_CHECK = "final_check"
 ROLE_SCOUT = "scout"  # v4: task "queries" answers SearchQueries, task "report" a ScoutReport
 ROLE_DIRECTIONS = "directions"  # v4: the direction writer, answering a DirectionSet
+ROLE_EDITOR = "editor"  # v5: the editor's Ask mode, answering an EditorAnswer
 
 _UNKNOWN_ROLE_TEXT = json.dumps({"error": "FakeLlm received no context"})
 
@@ -132,7 +135,8 @@ class FakeLlm(BaseLlm):
     critic, a RoundRanking for the critic's ranking pass, a RoundJudgement
     for the judge, a FinalReview for the final check, SearchQueries or a
     ScoutReport for the scout (by its task), a DirectionSet for the direction
-    writer, or an error for anything else.
+    writer, an EditorAnswer for the editor (from the request in its message),
+    or an error for anything else.
     """
 
     model: str = "fake"
@@ -161,6 +165,9 @@ class FakeLlm(BaseLlm):
             text = json.dumps(_fake_scout(context).model_dump())
         elif role == ROLE_DIRECTIONS:
             text = json.dumps(_fake_direction_set(context).model_dump())
+        elif role == ROLE_EDITOR:
+            answer = _fake_editor_answer(_request_text(llm_request), context)
+            text = json.dumps(answer.model_dump())
         else:
             text = _UNKNOWN_ROLE_TEXT
 
@@ -180,6 +187,22 @@ def _digest_request(llm_request: LlmRequest) -> bytes:
                 texts.append(part.text)
     source = bytes(image) if image else "".join(texts).encode("utf-8")
     return hashlib.sha256(source).digest()
+
+
+def _request_text(llm_request: LlmRequest) -> str:
+    """The first text of the newest message from the user, or "" when it has none.
+
+    The editor's request comes first in its message, before the pictures. The newest message
+    is read, so a request the run also opened with, or an answer asked for again, still
+    gives the request.
+    """
+    for content in reversed(llm_request.contents or []):
+        if content.role != "user":
+            continue
+        texts = [part.text for part in content.parts or [] if part.text]
+        if texts:
+            return texts[0]
+    return ""
 
 
 def _fake_style_card(digest: bytes) -> StyleCard:
@@ -756,6 +779,151 @@ def _direction_layouts(context: dict[str, Any]) -> list[LayoutId]:
         if layout in _DIRECTION_LAYOUTS
     ] or list(_DEFAULT_ALLOWED_LAYOUTS)
     return [allowed[index % len(allowed)] for index in range(len(_DIRECTION_FORMATS))]
+
+
+# ------------------------------------------------------------------ editor (v5)
+
+# The stand-in's one question. The edit run asks it too, for an answer with nothing in it.
+EDITOR_QUESTION = "Say which block to change and how."
+_EDITOR_SUMMARY = "Demo mode: {edits}."
+_EDITOR_SIZE_STEP = 8  # pixels, for "smaller" and "larger"
+_EDITOR_MOVE_STEP = 5.0  # percent of the canvas, for "up", "down", "left" and "right"
+# A text block's size when its context gives none: the renderer's headline size.
+_EDITOR_FALLBACK_PX = 64
+_EDITOR_TEXT_KINDS = frozenset({"headline", "subline", "text"})
+_EDITOR_MAX_TEXT_CHARS = 200  # a text block's words, as Block allows
+_EDITOR_SIZES: dict[str, int] = {"smaller": -_EDITOR_SIZE_STEP, "larger": _EDITOR_SIZE_STEP}
+_EDITOR_MOVES: dict[str, tuple[float, float]] = {
+    "up": (0.0, -_EDITOR_MOVE_STEP),
+    "down": (0.0, _EDITOR_MOVE_STEP),
+    "left": (-_EDITOR_MOVE_STEP, 0.0),
+    "right": (_EDITOR_MOVE_STEP, 0.0),
+}
+# The kinds a request can name. The photo is among them so that a request about the photo,
+# which no block is, gets the question rather than moving the headline.
+_EDITOR_KIND_RE = re.compile(r"\b(headline|subline|logo|shade|image|text|photo)\b")
+_EDITOR_BLOCK_RE = re.compile(r"\bblock (\d+)\b")
+_EDITOR_LOGO_RE = re.compile(r"\b(?:change|replace) the logo\b")
+_EDITOR_DELETE_SHADE_RE = re.compile(r"\bdelete the shade\b")
+_EDITOR_ADD_TEXT_RE = re.compile(r"\badd text\b", re.IGNORECASE)
+_EDITOR_WORDS_RE = re.compile(r"\bchange the (headline|subline) to\b", re.IGNORECASE)
+# The editor's Send back and Bring forward, in words: "send the shade back".
+_EDITOR_REORDERS: dict[str, re.Pattern[str]] = {
+    "back": re.compile(r"\bsend\b.*\bback\b"),
+    "forward": re.compile(r"\bbring\b.*\bforward\b"),
+}
+
+
+def _fake_editor_answer(request: str, context: dict[str, Any]) -> EditorAnswer:
+    """The stand-in's edits for a handful of verbs, so demo mode shows the Ask mode.
+
+    "smaller" and "larger" step a text block's size by 8px, "up", "down", "left" and "right"
+    move a block by 5 percent of the canvas, and "send … back" and "bring … forward" move it
+    one place in the list: the block the request names by kind ("the logo"), or by number
+    ("block 3", which may name a block that is not there), else the headline. "change the
+    headline to" or "change the subline to" gives that block the words after "to"; "change the
+    logo" or "replace the logo" puts the uploaded file on the logo block; "delete the shade"
+    deletes the first shade; "add text" adds a text block with the words after it. No other
+    verb is read in a block's new words. Anything else, a verb whose block is not on the
+    canvas, or a logo change without a file, gets the question back. The summary names the
+    operations.
+    """
+    layout = context.get("layout") or {}
+    blocks = [block for block in layout.get("blocks") or [] if isinstance(block, dict)]
+    retitling = _EDITOR_WORDS_RE.search(request)
+    rest = request[: retitling.start()] if retitling else request
+    adding = _EDITOR_ADD_TEXT_RE.search(rest)
+    asked = (rest[: adding.start()] if adding else rest).lower()
+    sizes = [step for word, step in _EDITOR_SIZES.items() if _says(asked, word)]
+    moves = [step for word, step in _EDITOR_MOVES.items() if _says(asked, word)]
+    turns = [way for way, pattern in _EDITOR_REORDERS.items() if pattern.search(asked)]
+    edits: list[EditorEdit] = []
+    if sizes or moves or turns:
+        target = _editor_target(asked, blocks)
+        if target is None or (sizes and target.get("kind") not in _EDITOR_TEXT_KINDS):
+            return EditorAnswer(usable=False, question=EDITOR_QUESTION)
+        number = target["number"]
+        if sizes:
+            size = int((target.get("style") or {}).get("size_px") or _EDITOR_FALLBACK_PX)
+            edits.append(EditorEdit(op="set_style", block=number, size_px=size + sum(sizes)))
+        if moves:
+            box = target.get("box") or {}
+            x = _moved(box, "x", sum(step[0] for step in moves))
+            y = _moved(box, "y", sum(step[1] for step in moves))
+            edits.append(EditorEdit(op="move", block=number, x=x, y=y))
+        edits += [EditorEdit(op="reorder", block=number, direction=way) for way in turns]
+    if _EDITOR_LOGO_RE.search(asked):
+        logo = _first_of(blocks, "logo")
+        upload_id = str(context.get("upload_id") or "")
+        if logo is None or not upload_id:
+            return EditorAnswer(usable=False, question=EDITOR_QUESTION)
+        edits.append(EditorEdit(op="replace_image", block=logo["number"], upload_id=upload_id))
+    if _EDITOR_DELETE_SHADE_RE.search(asked):
+        shade = _first_of(blocks, "shade")
+        if shade is None:
+            return EditorAnswer(usable=False, question=EDITOR_QUESTION)
+        edits.append(EditorEdit(op="delete", block=shade["number"]))
+    if adding:
+        words = rest[adding.end() :].strip()[:_EDITOR_MAX_TEXT_CHARS]
+        if not words:
+            return EditorAnswer(usable=False, question=EDITOR_QUESTION)
+        edits.append(EditorEdit(op="add_text", text=words))
+    if retitling:
+        block = _first_of(blocks, retitling.group(1).lower())
+        words = request[retitling.end() :].strip()[:_EDITOR_MAX_TEXT_CHARS]
+        if block is None or not words:
+            return EditorAnswer(usable=False, question=EDITOR_QUESTION)
+        edits.append(EditorEdit(op="set_text", block=block["number"], text=words))
+    if not edits:
+        return EditorAnswer(usable=False, question=EDITOR_QUESTION)
+    return EditorAnswer(usable=True, edits=edits, summary=_editor_summary(edits, blocks))
+
+
+def _says(text: str, word: str) -> bool:
+    """Whether the text holds the word on its own, so "up" is not read in "upload"."""
+    return re.search(rf"\b{word}\b", text) is not None
+
+
+def _editor_target(asked: str, blocks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The block a request names: by number, even one that is not there (then only its number
+    is known), or by kind, the first block of that kind; the headline when it names neither.
+    None when the kind it names is not on the canvas."""
+    numbered = _EDITOR_BLOCK_RE.search(asked)
+    if numbered:
+        number = int(numbered.group(1))
+        found = next((block for block in blocks if block.get("number") == number), None)
+        return found if found is not None else {"number": number}
+    named = _EDITOR_KIND_RE.search(asked)
+    return _first_of(blocks, named.group(1) if named else "headline")
+
+
+def _first_of(blocks: list[dict[str, Any]], kind: str) -> dict[str, Any] | None:
+    """The first block of the kind in the context's list, or None."""
+    return next((block for block in blocks if block.get("kind") == kind), None)
+
+
+def _moved(box: dict[str, Any], side: str, delta: float) -> float | None:
+    """One side of a block's box moved by `delta`, or None, which keeps it, when the move does
+    not go that way or the box does not give the side."""
+    start = box.get(side)
+    if not delta or not isinstance(start, (int, float)):
+        return None
+    return float(start) + delta
+
+
+def _editor_summary(edits: list[EditorEdit], blocks: list[dict[str, Any]]) -> str:
+    """The stand-in's one sentence: each operation, with the block it names by kind, or by
+    number when the block is not on the canvas."""
+    kinds = {block.get("number"): block.get("kind") for block in blocks}
+    named: list[str] = []
+    for edit in edits:
+        if edit.block is None:
+            named.append(edit.op)
+        elif kinds.get(edit.block):
+            named.append(f"{edit.op} on the {kinds[edit.block]}")
+        else:
+            named.append(f"{edit.op} on block {edit.block}")
+    return _EDITOR_SUMMARY.format(edits=", ".join(named))
 
 
 # --------------------------------------------------------------- model selection
