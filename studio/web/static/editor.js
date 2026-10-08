@@ -148,8 +148,9 @@
   // answer, knows whether it still fits), whether the faces in use have loaded (so the
   // words are measured in them), the brand's uploads as the picker last listed them, the
   // arrangement and the words before the Ask panel's last change, which Undo brings back
-  // (null when there is none), and the Ask panel's last upload ({ file, id }), so a file
-  // chosen once goes to the shelf once.
+  // (null when there is none, or once the designer changes the canvas by hand), whether
+  // such a layout is being loaded now, and the Ask panel's last upload ({ file, id }), so a
+  // file chosen once goes to the shelf once.
   const editor = {
     data: null,
     layout: null,
@@ -159,6 +160,7 @@
     fontLoaded: false,
     uploads: [],
     undo: null,
+    loading: false,
     askUpload: null,
   };
   // The page's elements, found once.
@@ -856,8 +858,15 @@
 
   // The canvas changed after a preview, so Use this layout would finish an arrangement
   // that is no longer on it: the button waits for the next preview, and a line says so.
+  // A change by hand after an Ask also ends what Undo offers, since bringing back the layout
+  // from before the Ask would throw that change away; the change an answer or Undo itself
+  // loads (`editor.loading`) keeps it.
   function markStale() {
     editor.changes += 1;
+    if (!editor.loading && editor.undo) {
+      editor.undo = null;
+      ui.askUndo.hidden = true;
+    }
     if (ui.finishButton.disabled) return;
     ui.finishButton.disabled = true;
     ui.stale.hidden = false;
@@ -1388,9 +1397,14 @@
     const block = editor.layout.blocks[editor.selected];
     const same = editor.selected === PHOTO || (block && chosen && block.kind === chosen.kind);
     editor.selected = same ? editor.selected : NONE;
-    markStale();
-    drawCanvas();
-    syncPanel();
+    editor.loading = true;
+    try {
+      markStale();
+      drawCanvas();
+      syncPanel();
+    } finally {
+      editor.loading = false;
+    }
     await facesLoaded();
     redraw();
   }

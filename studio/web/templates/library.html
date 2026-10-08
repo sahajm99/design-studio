@@ -46,7 +46,7 @@
   <div class="section-head">
     <div>
       <h2 class="section-title">Your uploads</h2>
-      <p class="section-desc">Images you uploaded in the editor or as references. The editor's Add image offers them again. Removing an upload breaks posts that use it. Removing an upload also takes it off any session that used it as a reference.</p>
+      <p class="section-desc">Images you uploaded in the editor or as references. The editor's Add image offers them again. Removing an upload takes it off every session that used it as a reference; a saved post keeps its picture until its next render.</p>
     </div>
   </div>
   {% if uploads %}
@@ -58,7 +58,7 @@
         <span class="upload-name">{{ upload.name or "Untitled" }}</span>
         <span class="upload-meta">{{ upload.width }} × {{ upload.height }} px</span>
       </span>
-      <form method="post" action="/uploads/{{ upload.id }}/remove" class="inline-form">
+      <form method="post" action="/uploads/{{ upload.id }}/remove" class="inline-form" data-confirm-remove-upload>
         <button type="submit" class="btn btn-small">Remove</button>
       </form>
     </li>
@@ -67,7 +67,7 @@
   {% else %}
   <div class="empty">
     <p class="empty-title">Nothing uploaded yet</p>
-    <p class="empty-detail">Add images from the editor.</p>
+    <p class="empty-detail">Add images from the editor or as references.</p>
   </div>
   {% endif %}
 </section>

@@ -1,9 +1,10 @@
 // Design Studio: small, page-specific behaviour. No build step, no framework.
 // Every page works from its server-rendered HTML alone; this file only adds
 // the live-updating touches (the theme toggle, the bar condensing as the page
-// scrolls, the library's choices and progress line, the Studio form's auto
-// limits, "Research first" and Start, the run and session pages' polling, the
-// session page's directions and reference notes, the post page's copy button).
+// scrolls, the library's choices and progress line and its uploads' Remove, the
+// Studio form's auto limits, "Research first" and Start, the run and session
+// pages' polling, the session page's directions, reference notes and Add, the
+// post page's copy button).
 (() => {
   "use strict";
 
@@ -41,7 +42,13 @@
     propose: "Propose directions",
     save_directions: "Save the directions",
     research: "Research",
+    // v5: the editor's Ask mode.
+    ask_editor: "Ask the editor",
   };
+
+  // What Remove on one of the brand's uploads asks first, as the archive's deletes do.
+  const REMOVE_UPLOAD =
+    "Remove this upload? Posts that placed it will lose it on their next render.";
 
   // A step name two kinds of run share, labelled for one of them, as the server does.
   const STEP_LABELS_BY_KIND = {
@@ -165,18 +172,9 @@
       );
     }
 
-    // Start waits while the analyst cards the reference images, so it is turned off once
-    // pressed: a second press would start a second session. A page shown again from the
-    // browser's history gets it back.
-    const start = form.querySelector('button[type="submit"]');
-    if (start) {
-      form.addEventListener("submit", () => {
-        start.disabled = true;
-      });
-      window.addEventListener("pageshow", (event) => {
-        if (event.persisted) start.disabled = false;
-      });
-    }
+    // Start waits while the analyst cards the reference images; a second press would start a
+    // second session.
+    guardSubmit(form);
 
     const budget = limits.querySelector('input[name="photo_budget"]');
     const hint = limits.querySelector("[data-auto-hint]");
@@ -184,6 +182,21 @@
     const syncHint = () => setText(hint, autoHintText(budget));
     budget.addEventListener("input", syncHint);
     syncHint();
+  }
+
+  // A form whose answer waits on the analyst turns its button off once pressed, so a second
+  // press cannot send it again; a page shown again from the browser's history gets the
+  // button back. A form the browser refuses to send (a required field left empty) is never
+  // sent, so its button stays on.
+  function guardSubmit(form) {
+    const button = form && form.querySelector('button[type="submit"]');
+    if (!button) return;
+    form.addEventListener("submit", () => {
+      button.disabled = true;
+    });
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) button.disabled = false;
+    });
   }
 
   // The number the server will use: the field's own default when it is empty,
@@ -430,6 +443,9 @@
     document.addEventListener("click", onSampleReactionClick);
     document.addEventListener("focusout", onSampleCommentBlur);
     document.addEventListener("focusout", onReferenceNoteBlur);
+    // Add waits while the analyst cards the new references; a second press would add them
+    // twice, past the six a session keeps.
+    guardSubmit(document.querySelector("[data-references-add]"));
     initAdjustForms();
     initDirections();
 
@@ -675,6 +691,18 @@
     }
   }
 
+  // ------------------------------------------------------- library uploads
+
+  // Remove takes an upload off the shelf and off every session that used it, and a post
+  // that placed it loses it on its next render, so it asks first.
+  function initUploadsStrip() {
+    document.querySelectorAll("[data-confirm-remove-upload]").forEach((form) => {
+      form.addEventListener("submit", (event) => {
+        if (!window.confirm(REMOVE_UPLOAD)) event.preventDefault();
+      });
+    });
+  }
+
   // ------------------------------------------------------------ post page
 
   function initPostPage() {
@@ -703,5 +731,6 @@
   initRunPage();
   initSessionPage();
   initArchivePage();
+  initUploadsStrip();
   initPostPage();
 })();

@@ -37,13 +37,14 @@ from studio.contracts import (
     Run,
     SessionReference,
     StudioSession,
+    StyleCard,
     new_id,
 )
+from studio.media import agent_picture
 from studio.photos.base import PhotoProvider
 from studio.render import CUSTOM_DOES_NOT_FIT, Renderer
 from studio.research.base import SearchProvider
 from studio.store import Store
-from studio.web.uploads import agent_copy_path
 from studio.workflows.steps import StepInfo, readable_error
 
 logger = logging.getLogger(__name__)
@@ -60,9 +61,12 @@ _MAX_PROMPT_WORDS = 120
 _FIXED_ENDING = "No text, no logos, no watermarks."
 # A word that ends a sentence, closing quotes or brackets allowed after the mark.
 _SENTENCE_END_RE = re.compile(r"[.!?][\"')\]]*$")
-# Tags that would close an agent's context block early if text from outside the kit carried
-# them: the web's, or the designer's own words.
-_CONTEXT_TAG_RE = re.compile(r"</?\s*context\s*>", re.IGNORECASE)
+# A context tag in any form, opening or closing, with spaces or attributes inside it, that
+# text from outside the kit (the web's, or the designer's own words) could carry into an
+# agent's context block.
+_CONTEXT_TAG_RE = re.compile(r"<\s*/?\s*context\b[^>]*>", re.IGNORECASE)
+# A session's references, at most: as many as the session page lets it keep.
+_MAX_DESIGNER_REFERENCES = 6
 # The kit's own quality bar, inside its brand folder.
 _IDEAL_EXAMPLE = Path("examples") / "ideal-output.png"
 # The setting that holds the designer's quality bar (v3.1).
@@ -368,20 +372,22 @@ def quality_bar_parts(bar: Path | None) -> list[types.Part]:
 
 
 def designer_references(store: Store, session_id: str | None) -> list[SessionReference]:
-    """The session's references whose image is still in the data folder, oldest first; none
-    without a session (a post can have none).
+    """The session's references whose image is still in the data folder, oldest first and six
+    at most; none without a session (a post can have none).
 
     Removing an upload in the Library takes its references off every session. A reference
     whose file has gone some other way is left out everywhere, so the session page, the six
-    a session takes, the agents and the post page's count still agree.
+    a session takes, the agents and the post page's count still agree. Two Adds sent at
+    once could each find room for the same last place, so no more than six are read.
     """
     if not session_id:
         return []
-    return [
+    present = [
         reference
         for reference in store.list_session_references(session_id)
         if existing_media(store, reference.image_path) is not None
     ]
+    return present[:_MAX_DESIGNER_REFERENCES]
 
 
 def designer_reference_label(number: int, note: str) -> str:
@@ -394,15 +400,25 @@ def designer_reference_label(number: int, note: str) -> str:
 
 def designer_reference_context(references: list[SessionReference]) -> list[dict[str, Any]]:
     """The references as an agent's context carries them, in their order and numbered from 1:
-    each one's number, note and the analyst's card, None when no card could be written."""
+    each one's number, note and the analyst's card, None when no card could be written. The
+    note, and the card's technique and mood words, are quoted: the designer wrote the note,
+    and the card was written from the designer's picture."""
     return [
         {
             "number": number,
-            "note": reference.note,
-            "card": reference.card.model_dump(mode="json") if reference.card else None,
+            "note": quoted(reference.note),
+            "card": _quoted_card(reference.card) if reference.card else None,
         }
         for number, reference in enumerate(references, start=1)
     ]
+
+
+def _quoted_card(card: StyleCard) -> dict[str, Any]:
+    """A reference's style card as a context carries it, its free text quoted."""
+    data = card.model_dump(mode="json")
+    data["technique"] = quoted(card.technique)
+    data["mood"] = [quoted(word) for word in card.mood]
+    return data
 
 
 def designer_reference_images(
@@ -410,25 +426,15 @@ def designer_reference_images(
 ) -> list[dict[str, str]]:
     """Each reference's image with the line naming it, numbered as the context numbers them.
     The image is the reference's agent copy, upright and at most 2048 pixels on its longer
-    side, or the upload itself when it has no copy."""
+    side (written now for a reference attached before the copies were made), or the upload
+    itself when no copy can be written."""
     return [
         {
             "label": designer_reference_label(number, reference.note),
-            "path": str(_agent_image(store, reference.image_path)),
+            "path": str(agent_picture(store, reference.image_path)),
         }
         for number, reference in enumerate(references, start=1)
     ]
-
-
-def _agent_image(store: Store, image_path: str) -> Path:
-    """The file the models are sent for an upload: its agent copy, a JPEG or, for a picture
-    with transparency, a PNG; or the upload itself, for a reference attached before the copies
-    were made or one whose copy could not be written."""
-    for transparent in (False, True):
-        relative = existing_media(store, agent_copy_path(image_path, transparent=transparent))
-        if relative is not None:
-            return store.media_path(relative)
-    return store.media_path(image_path)
 
 
 def designer_references_sent(count: int) -> str:
@@ -467,10 +473,13 @@ def mentions(text: str, term: str) -> bool:
 
 
 def quoted(text: str) -> str:
-    """Text from outside the kit, as it may sit inside a context block: without context tags,
-    so it cannot end the block early. The scout quotes the web's text with it, and the edit
-    run the designer's words."""
-    return _CONTEXT_TAG_RE.sub("", text)
+    """Text from outside the kit, as it may sit inside a context block: with no context tag
+    left in it, so it cannot end the block early. Tags are taken out until none is left,
+    since taking one out of `</con<context>text>` would join a new one. The scout quotes the
+    web's text with it, and the edit run and the references the designer's words."""
+    while (cleaned := _CONTEXT_TAG_RE.sub("", text)) != text:
+        text = cleaned
+    return text
 
 
 def clean_hashtags(hashtags: list[str]) -> list[str]:

@@ -266,11 +266,11 @@ class Block(BaseModel):
     x: float = Field(ge=0, le=100)  # left edge, percent of the canvas width
     y: float = Field(ge=0, le=100)  # top edge, percent of the canvas height
     w: float = Field(gt=0, le=100)  # width, percent of the canvas width
-    h: float = Field(default=0, ge=0, le=100)  # height, percent; shade only (text takes its natural height)
+    h: float = Field(default=0, ge=0, le=100)  # height, percent; shade and image blocks only
     align: TextAlign = "left"  # text only
     size_px: int = Field(default=0, ge=0, le=400)  # text only; 0 means the default size
     colour: str = ""  # a palette colour name; text and shade only. "" means the role colour
-    opacity: float = Field(default=0.7, ge=0, le=1)  # shade only
+    opacity: float = Field(default=0.7, ge=0, le=1)  # shade and image blocks
     # v3.1: text only. font names a FontFace the kit allows ("" is the kit's family);
     # weight is 100 to 900, or 0 for the role's default; italic uses the face's italic file.
     font: str = ""

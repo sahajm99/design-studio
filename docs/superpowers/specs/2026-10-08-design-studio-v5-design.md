@@ -206,3 +206,16 @@ About three days with reviews, after the hand-in. Each part ships on its own.
 3. Should the Ask mode also be offered on the post page, as the "Ask for a change" box is?
    Proposed: no; that box changes the words or the photo through the session, and the Ask
    mode changes the layout in the editor. Keeping them apart keeps each explainable.
+
+## As built (2026-10-08)
+
+Built in three tasks (B with C, then A, then D), each reviewed, fixed once and re-reviewed, then one review of the whole with a fix wave. Rulings taken on the way:
+
+- Uploads live under `uploads/<brand>/`, not under a session folder, so a reference can be placed again in the editor; the Library's "Your uploads" lists them.
+- "Change the logo" is an image override on the kit's logo block, box kept, so the logo block the kit requires is still present.
+- From v5 the blocks' list order is the stacking order; a shade added by hand before v5 may need one "Send back".
+- The models see an upright copy of every reference and uploaded file capped at 2048px; the shelf keeps the original.
+- The Ask mode can change the headline and the subline (the response carries the words); a stale answer is thrown away when the canvas changed meanwhile; one step of Undo.
+- A shade or image over the logo or the words is reported by the guardrails, never moved.
+- Notes on references are edited between runs, so the first draft and an auto session take each reference whole.
+- No duplicate check by content hash on uploads.

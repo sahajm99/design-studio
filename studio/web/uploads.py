@@ -5,19 +5,19 @@ decode, and it is saved under its real extension, never under the name it was se
 The quality bar, the library and a session's own photo keep their own routes and only share
 the checks. The images the editor places (v5), and the references a session carries, are
 kept under the brand in `data/uploads/<brand_id>/<id>.<ext>` and recorded in the store, so
-an image uploaded once can be placed again. A session reference also gets an agent copy
-beside its upload, upright and at most 2048 pixels on its longer side, which is what the
-models are sent; the shelf, the pages and the editor keep the original.
+an image uploaded once can be placed again. A session reference, and a file sent with the
+editor's Ask, also get an agent copy beside the upload, upright and at most 2048 pixels on
+its longer side, which is what the models are sent; the copy lives in `studio/media.py`, and
+the shelf, the pages and the editor keep the original.
 """
 
 from __future__ import annotations
 
 import asyncio
 import io
-from pathlib import PurePosixPath
 
 from fastapi import UploadFile
-from PIL import Image, ImageOps
+from PIL import Image
 
 from studio.contracts import Upload, UploadSource, new_id
 from studio.store import Store
@@ -27,10 +27,6 @@ MAX_UPLOAD_PIXELS = 40_000_000
 UPLOAD_REFUSED = "That file is not an image the studio can use."
 # The most of an uploaded file's name the picker and the Library show.
 MAX_UPLOAD_NAME_CHARS = 80
-# An agent copy is kept to this many pixels on its longer side, as the quality bar is: an
-# upload can be 15 MB, and the models are sent each reference in several calls.
-MAX_AGENT_SIDE = 2048
-_AGENT_JPEG_QUALITY = 85
 
 # The formats an upload may be, as Pillow names them, and the extension each is saved with.
 # A phone's multi-picture JPEG opens as "MPO"; it is a JPEG file all the same.
@@ -91,39 +87,6 @@ def save_brand_upload(
     )
     store.add_upload(upload)
     return upload
-
-
-def agent_copy_path(image_path: str, *, transparent: bool = False) -> str:
-    """The media path of an upload's agent copy, beside it: `uploads/<brand>/<id>.agent.jpg`,
-    or `.agent.png` for a picture with transparency. It is derived from the upload's own path
-    and never stored."""
-    path = PurePosixPath(image_path)
-    extension = "png" if transparent else "jpg"
-    return str(path.with_name(f"{path.stem}.agent.{extension}"))
-
-
-def write_agent_copy(store: Store, image_path: str, data: bytes) -> str:
-    """Write the agent copy of the upload at `image_path`, whose bytes are `data`, and give back
-    its media path. It is turned upright and kept to 2048 pixels on its longer side, as the
-    quality bar is prepared: a JPEG, or a PNG when the picture shows transparency.
-
-    Decoding is blocking work, so callers run this off the event loop. Pillow's errors are
-    passed on; the original is then what the models are sent.
-    """
-    with Image.open(io.BytesIO(data)) as image:
-        picture = ImageOps.exif_transpose(image)
-    picture.thumbnail((MAX_AGENT_SIDE, MAX_AGENT_SIDE))
-    has_alpha = picture.mode in ("RGBA", "LA", "PA") or "transparency" in picture.info
-    with_alpha = picture.convert("RGBA") if has_alpha else None
-    # Many PNGs carry an alpha channel that is opaque throughout; those are photos, kept small.
-    transparent = with_alpha is not None and with_alpha.getchannel("A").getextrema()[0] < 255
-    relative = agent_copy_path(image_path, transparent=transparent)
-    path = store.media_path(relative)
-    if transparent:
-        with_alpha.save(path, format="PNG")
-    else:
-        picture.convert("RGB").save(path, format="JPEG", quality=_AGENT_JPEG_QUALITY)
-    return relative
 
 
 def _image_facts(data: bytes, *, decode: bool = False) -> tuple[str, int, int] | None:

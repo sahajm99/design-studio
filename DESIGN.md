@@ -18,8 +18,8 @@ The assessment sketched gather, curate, create. The studio maps onto it like thi
 | Sketch | In the studio |
 | --- | --- |
 | Gather | The Library: the brand's inspiration board, uploads, pasted links and an inbox folder. The scout, which searches the web for how the brand's field presents the brief's subject today. |
-| Curate | Liked and disliked marks on references, summarised into a taste profile. A quality bar, the one image the critic holds every photo to. Three directions from the research, one chosen. |
-| Create | A session: prompt, photos, critique, feedback, layouts, final check, post. An editor for the layout. An archive of posts. |
+| Curate | Liked and disliked marks on references, summarised into a taste profile. A quality bar, the one image the critic holds every photo to. Up to six reference images on a session, with notes, for how this one post should look. Three directions from the research, one chosen. |
+| Create | A session: prompt, photos, critique, feedback, layouts, final check, post. An editor for the layout, with the designer's own text and images and an Ask mode that applies a typed request as edits. An archive of posts. |
 
 Two ways to run a session:
 
@@ -33,7 +33,7 @@ Two ways to run a session:
 
 ## 2. The agents
 
-Eight agents, all on Gemini 3.5 Flash-Lite through the Google ADK, each with a pydantic output
+Nine agents, all on Gemini 3.5 Flash-Lite through the Google ADK, each with a pydantic output
 schema so a malformed answer is rejected before it reaches the code. In demo mode a stand-in
 answers for each role, so the whole studio runs with no keys.
 
@@ -47,9 +47,12 @@ answers for each role, so the whole studio runs with no keys.
 | Ranker | The order of a round | Every scored photo of the round | Best-first order with a reason per sample |
 | Judge | Whether a round is good enough | The scored, ranked round and the stop score | Good enough or not, a reason, two to four changes for the prompt |
 | Final checker | Which layout ships | Up to three composed layouts, the words, the quality bar | The pick, ship or not, a score, the biggest flaw, a fix hint |
+| Editor | A typed change to the layout | The request, the layout's numbered blocks, the kit's palette and fonts, a picture of the canvas, an uploaded file | A short list of edit operations from a fixed set and a one-line summary, or one question |
 
 Hand-offs never go agent to agent. Each answer is written into SQLite as the session's product
-state, and the next step reads from there. The ADK session state is scratch for one run only.
+state, and the next step reads from there; the editor agent's answer is the one exception, it
+goes back to the page as a list of edits and only the run's step note is kept. The ADK session
+state is scratch for one run only.
 
 Why this split: each agent can be tested, replaced and explained on its own, and its instruction
 stays short. The cost is more calls per post, about a dozen in an auto run.
@@ -57,8 +60,9 @@ stays short. The cost is more calls per post, about a dozen in an auto run.
 ## 3. Orchestration
 
 Every run is an ADK `Workflow` graph of named function steps: draft, samples, revise prompt,
-compose, finish, revise, scout and auto. Steps that call an agent run as rerunnable nodes, as
-the ADK requires. Each run gets its own `Runner` and in-memory session service.
+compose, finish, revise, scout, auto and edit (the editor's Ask, one step). Steps that call an
+agent run as rerunnable nodes, as the ADK requires. Each run gets its own `Runner` and in-memory
+session service.
 
 The auto run is the only planner, and it is a loop with a fixed decision order after each round:
 no judgement, good enough, rounds limit, photo allowance. Code holds the judge to its own rule: a
@@ -126,6 +130,9 @@ address never leaks into a log.
 | Research fails or finds nothing | The draft follows the brief alone | "Research failed (…); drafting from the brief alone." |
 | A model answer does not fit its schema | Asked once more with the problem fed back, then the step fails | The step's error on the run page |
 | The app restarts mid-run | Running steps are marked interrupted | The run shows as interrupted; the session is usable |
+| An upload is not an image, too large or cut short | Refused before it is saved | The reason under the field; the session or the layout is unchanged |
+| The editor agent fails or answers nothing usable | The edit run is marked failed; nothing is applied | "The editor could not answer. Try again.", or its one question |
+| An edit would leave the canvas, name a missing block or remove the logo | Dropped by code, the rest applied | The dropped edit named under the summary; Undo restores the layout |
 | The designer presses Stop | The run is cancelled cleanly | "Stopped by you." and manual mode |
 
 Every failure in an auto run ends in the same place: the session back in manual mode with
@@ -181,6 +188,9 @@ the studio is built so that call is one click away at every step.
 | Words-only posts in auto mode | Rejected on 7 October | The first grounded run took a words-only direction and produced words on a grey field; every auto post now shows a photograph |
 | Copying reference designs into posts | Never | References are hot-linked and analysed into style cards; a reference shapes the prompt and is never copied |
 | A free-form canvas editor | Limited to a custom layout with guardrails | The deadline; the renderer still enforces the kit's rules on custom layouts |
+| Reference images as image-to-image input | Rejected | The free photo model is text to image; references guide the prompt and are never copied |
+| An editor agent that redraws the layout | Rejected for a fixed set of edit operations | A small command set is reliable, keeps the guardrails in code, and makes every change explainable and reversible |
+| A shade or image over the logo or words | Reported, never moved | A sticker over the logo's corner may be wanted; the guardrail line says what is covered |
 
 ## 10. Costs and limits
 
@@ -209,10 +219,16 @@ Everything runs on free tiers; the numbers and the model landscape are in
 - One format, 4:5. No 1:1, no 9:16, no carousels.
 - Every post is a photo with a headline and a subline. Offer cards, event cards, quote cards,
   number cards, steps and comparisons do not exist yet.
-- The editor lacks undo, align, snap, crop, text styles and shapes.
+- The editor has the designer's own text and images and an Ask mode with one step of undo, but
+  no align, snap, crop, text styles or shapes, and the Ask mode's placing is the model's judgement
+  from a picture, so "a bit to the left" lands roughly.
 - The 99 tests cover the store, the renderer, the brand loader, the importer, the photo client,
-  the demo workflows and the routes. They do not cover the auto loop, the scout or the critic
-  context, which were tested by hand and by throwaway scripts.
+  the demo workflows and the routes. They do not cover the auto loop, the scout, the critic
+  context, or anything from v5 (the uploads, the references, the new guardrails, the edit
+  applier, the Ask), which were tested by hand and by throwaway scripts.
+- The Ask mode's coverage lines measure a text block's first line only, and the editor's
+  context carries the words typed on the page, so what the agent sees is only as current as
+  the last Preview.
 - Only the Hybridge kit has been run. A second kit is the next proof of the brand-agnostic claim.
 - One process, one container, SQLite, in-memory agent sessions. A run does not survive a restart
   and nothing queues.
@@ -227,8 +243,9 @@ Everything runs on free tiers; the numbers and the model landscape are in
 3. **Onboarding from the UI.** A Brand page that creates the kit folder: name, audience and feel;
    logos; fonts; colours; contact and legal; example posts and the quality bar; research policy.
    The folder stays the source of truth; the UI writes it.
-4. **A brand asset library.** Real photos, product renders, icons and approved quotes with type
-   tags and a consent flag, visible to the direction writer and placeable in the editor.
+4. **A brand asset library.** "Your uploads" on the Library page is the seed: real photos,
+   product renders, icons and approved quotes still need type tags, a consent flag and a path
+   into the direction writer's context.
 5. **Sizes and carousels.** The composition already carries a width and height; templates that
    respond to the canvas give 1:1 and 9:16, and a slide set gives carousels.
 6. **Brand devices.** Accent bars, corner shapes, badges, an icon set, photo treatments and
@@ -256,7 +273,11 @@ Built on assumptions that a short call would settle:
 
 Four versions in three days, each from a written spec and plan under `docs/superpowers`, each
 built by implementer agents in short rounds, reviewed as a whole diff, fixed once and re-reviewed,
-then tested by hand with real models. Tests were written for the foundations in v1 and v2; from
+then tested by hand with real models. A fifth version followed the demo call on 8 October: the
+designer's own images as references and in the editor, and the editor's Ask mode, from the spec
+`docs/superpowers/specs/2026-10-08-design-studio-v5-design.md`, built the same way in three
+tasks with a review, a fix round and a re-review each, then one review of the whole and its fix
+wave. The rulings taken while building are listed at the end of each spec, under "As built". Tests were written for the foundations in v1 and v2; from
 v3 on, speed was chosen over new tests, which section 11 records as a gap. Rulings made along the
 way are in the specs' revision notes, the most consequential being the switch from Google
 grounding to a search provider after the spike showed no zero-cost path.

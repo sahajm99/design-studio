@@ -3,7 +3,8 @@ services:
     build: .
     image: design-studio:dev
     ports:
-      - "8000:8000"
+      # This machine only: the studio has no sign-in, and its uploads write files.
+      - "127.0.0.1:8000:8000"
     env_file:
       - path: .env
         required: false

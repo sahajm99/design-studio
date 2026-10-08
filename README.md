@@ -1,7 +1,7 @@
 # Design Studio
 
 A brief and a brand kit in, a finished social post out: a 1080 by 1350 PNG in the brand's logo,
-fonts and colours, with a caption and hashtags. Eight small agents on the Google ADK research the
+fonts and colours, with a caption and hashtags. Nine small agents on the Google ADK research the
 brief, propose directions, write the prompt and the words, judge the photos and pick the layout.
 The designer steers every step by hand, or lets a bounded loop run on its own.
 
@@ -56,7 +56,10 @@ docker compose run --rm --no-deps studio pytest -q
 
 Write a brief in a sentence or two, choose how many samples a round, and choose manual or auto
 mode. In auto mode you set the limits: rounds, photos and the stop score, and research is on by
-default. In manual mode research is a checkbox.
+default. In manual mode research is a checkbox. You can attach up to six reference images of how
+the post should look; on the session page each one takes a note such as "the light" or "this
+framing", between runs. The prompt writer, the direction writer and the critic draw on them and
+never copy one.
 
 ### 2. Research and directions
 
@@ -95,8 +98,11 @@ or open the post in the editor.
 ![The editor](docs/screenshots/04-editor.png)
 
 Move and resize the words, the shade and the photo, change fonts, sizes, colours and the
-background, and preview. The renderer applies the kit's rules and the contrast check to custom
-layouts too.
+background, and preview. Add your own lines of text and your own images, a new logo or a badge,
+and move, resize, layer and delete them. Or ask: type "make the headline smaller and move it
+up" or "change the logo to this one" with a file, and an editor agent applies it as a short
+list of edits you can undo; an unclear request comes back as one question. The renderer applies
+the kit's rules and the contrast check to custom layouts too.
 
 ### 7. Library: references, taste and the quality bar
 
@@ -106,7 +112,8 @@ Import the brand's inspiration board, upload images, paste links, or drop files 
 `data/inbox` and import the folder. Mark each reference liked or not; the analyst cards each one
 for style, and the taste summary shapes every prompt. A reference is never copied into a post.
 The quality bar is the one image the critic holds every photo to: the kit's example by default,
-or any post or sample you choose.
+or any post or sample you choose. "Your uploads" keeps every image uploaded in the editor or as
+a reference, so a logo is uploaded once and offered again.
 
 ### 8. Runs
 

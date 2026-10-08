@@ -96,8 +96,14 @@ _RETRY_OPTIONS = types.HttpRetryOptions(
 
 
 def wrap_context(role: str, context: dict[str, Any]) -> str:
-    """Embed a role and a JSON context in an agent instruction."""
-    return f"ROLE: {role}\n<context>\n{json.dumps(context, ensure_ascii=False)}\n</context>"
+    """Embed a role and a JSON context in an agent instruction.
+
+    Every "<" in the JSON is written as its escape, which JSON reads back as the same
+    character. "<" can only stand inside a string there, so the block stays valid JSON, and no
+    text in any value can close the block early.
+    """
+    body = json.dumps(context, ensure_ascii=False).replace("<", "\\u003c")
+    return f"ROLE: {role}\n<context>\n{body}\n</context>"
 
 
 _ROLE_RE = re.compile(r"^ROLE:\s*(.+?)\s*$", re.MULTILINE)

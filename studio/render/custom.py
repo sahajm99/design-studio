@@ -5,10 +5,12 @@ arrangement. These pure functions give the editor its starting arrangement (the
 default one, or one that follows a template candidate) and hold the guardrails
 the renderer applies before it draws: at most twelve blocks, the words and the
 logo inside the margin, every shade, image and the photo's box on the canvas,
-images only from the uploads folder, the logo always there and never too narrow,
-colours only from the palette and faces only from the kit's. The editor's Ask mode
-(v5) changes a layout only through `apply_edits`, which applies the editor agent's
-edits to a copy before the guardrails run. Nothing here names a brand.
+images only from the brand's uploads folder, the logo always there and never too
+narrow, colours only from the palette and faces only from the kit's. They also say,
+and change nothing, when a shade or an image is drawn over the logo or the words.
+The editor's Ask mode (v5) changes a layout only through `apply_edits`, which
+applies the editor agent's edits to a copy before the guardrails run. Nothing here
+names a brand.
 """
 
 from __future__ import annotations
@@ -16,6 +18,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 from studio.contracts import (
     Block,
@@ -54,6 +58,9 @@ BLOCKS_LEFT_OUT = f"Only the first {MAX_BLOCKS} blocks were kept."
 EMPTY_TEXT_LEFT_OUT = "A text block with no words was left out."
 IMAGE_LEFT_OUT = "An image whose file is not among the uploads was left out."
 LOGO_FILE_RESET = "The uploaded logo was not found, so the kit's logo was used."
+# Reported only: a designer may mean a sticker over the logo's corner.
+LOGO_COVERED = "The logo is under a shade or an image."
+WORDS_COVERED = "The {kind} is under a shade or an image."
 # v5: an Ask mode edit that was dropped, named by its place in the answer, counted from 1.
 EDIT_NO_BLOCK = "Edit {n} names a block that is not there."
 EDIT_NO_UPLOAD = "Edit {n} names an upload that is not there."
@@ -66,6 +73,10 @@ _MAX_NAME_CHARS = 40
 
 # The margin's far edge, on the right and at the bottom, in percent of the canvas.
 _FAR = 100 - MARGIN_PCT
+# An area of the canvas: x, y, width and height, in percent.
+_Area = tuple[float, float, float, float]
+# The words' line height, as the custom layout sets it.
+_LINE_HEIGHT = 1.08
 # Sums of percentages carry rounding noise; an edge this close to the margin is on it.
 _EPSILON = 1e-6
 
@@ -170,7 +181,9 @@ def apply_guardrails(
     - the canvas colour only from the palette;
     - faces only from the kit's, and italics only from a face's italic file (without a line);
     - the photo's box on the canvas and at least 10% each way (without a line);
-    - the default logo when the layout has none, in place of the twelfth block if need be.
+    - the default logo when the layout has none, in place of the twelfth block if need be;
+    - a line, with nothing moved, for the logo and for each kind of words that a shade or an
+      image later in the list overlaps, since it is drawn over them.
 
     The same line is given once. The renderer draws the copy and reports the lines, so what
     is reported is what is drawn. The rules are the same in both modes.
@@ -179,7 +192,7 @@ def apply_guardrails(
     palette = {colour.name for colour in kit.colours}
     blocks = [block for block in layout.blocks if _has_words(block, lines)]
     if uploads_root is not None:
-        blocks = _uploads_only(blocks, uploads_root, kit.id, lines)
+        blocks = uploads_only(blocks, uploads_root, kit.id, lines=lines)
     blocks = _at_most(blocks, MAX_BLOCKS, lines)
     blocks = [_inside_margin(block, lines) for block in blocks]
     blocks = [_wide_enough(block, lines) for block in blocks]
@@ -195,6 +208,7 @@ def apply_guardrails(
         _note(lines, LOGO_ADDED)
         blocks = _at_most(blocks, MAX_BLOCKS - 1, lines)
         blocks.append(_logo("top", "left"))
+    _note_covered(blocks, kit, uploads_root, lines)
     update = {"blocks": blocks, "background": background, "photo": photo}
     return layout.model_copy(update=update), lines
 
@@ -222,6 +236,31 @@ def upload_file(image_path: str, uploads_root: Path, brand_id: str) -> Path | No
         # A name the system cannot look up (a null byte, a loop of links) names no upload.
         return None
     return path
+
+
+def uploads_only(
+    blocks: list[Block], uploads_root: Path, brand_id: str, *, lines: list[str] | None = None
+) -> list[Block]:
+    """The blocks whose files are the brand's uploads: an image block whose file is not in
+    the brand's uploads folder is left out, and a logo whose uploaded file is not is drawn
+    from the kit's file again, in its own box. Each change adds its line to `lines`, when
+    given.
+
+    The guardrails apply it before anything is drawn, and the editor's starting layout
+    before the page gets it, so an upload removed in the Library never shows as an empty box.
+    """
+    noted = lines if lines is not None else []
+    kept: list[Block] = []
+    for block in blocks:
+        if block.kind == "image" and upload_file(block.image_path, uploads_root, brand_id) is None:
+            _note(noted, IMAGE_LEFT_OUT)
+            continue
+        overridden = block.kind == "logo" and block.image_path
+        if overridden and upload_file(block.image_path, uploads_root, brand_id) is None:
+            _note(noted, LOGO_FILE_RESET)
+            block = block.model_copy(update={"image_path": ""})
+        kept.append(block)
+    return kept
 
 
 def resolve_colour(name: str, kit: BrandKit, mode: Mode, role: str) -> str:
@@ -408,25 +447,6 @@ def _has_words(block: Block, lines: list[str]) -> bool:
     return False
 
 
-def _uploads_only(
-    blocks: list[Block], uploads_root: Path, brand_id: str, lines: list[str]
-) -> list[Block]:
-    """The blocks whose files are the brand's uploads: an image block whose file is not in
-    the brand's uploads folder is left out, and a logo whose uploaded file is not is drawn
-    from the kit's file again, in its own box; each with a line."""
-    kept: list[Block] = []
-    for block in blocks:
-        if block.kind == "image" and upload_file(block.image_path, uploads_root, brand_id) is None:
-            _note(lines, IMAGE_LEFT_OUT)
-            continue
-        overridden = block.kind == "logo" and block.image_path
-        if overridden and upload_file(block.image_path, uploads_root, brand_id) is None:
-            _note(lines, LOGO_FILE_RESET)
-            block = block.model_copy(update={"image_path": ""})
-        kept.append(block)
-    return kept
-
-
 def _at_most(blocks: list[Block], most: int, lines: list[str]) -> list[Block]:
     """At most `most` blocks: those past it are left out from the end of the list, with a
     line. The first logo always keeps its place, since every post carries it."""
@@ -585,6 +605,68 @@ def _note(lines: list[str], line: str) -> None:
     """Add the line, once."""
     if line not in lines:
         lines.append(line)
+
+
+def _note_covered(
+    blocks: list[Block], kit: BrandKit, uploads_root: Path | None, lines: list[str]
+) -> None:
+    """A line for the logo, and for each kind of words, that a shade or an image later in the
+    list overlaps: drawn over them, it can hide or fade them, and the contrast check measures
+    only what lies under the words. Nothing is moved, since a designer may mean it."""
+    for place, block in enumerate(blocks):
+        if block.kind != "logo" and block.kind not in _TEXT_KINDS:
+            continue
+        over = [later for later in blocks[place + 1 :] if later.kind in _OWN_HEIGHT_KINDS]
+        if not over:
+            continue
+        area = _drawn_area(block, kit, uploads_root)
+        if any(_overlap(area, (later.x, later.y, later.w, later.h)) for later in over):
+            line = LOGO_COVERED if block.kind == "logo" else WORDS_COVERED.format(kind=block.kind)
+            _note(lines, line)
+
+
+def _drawn_area(block: Block, kit: BrandKit, uploads_root: Path | None) -> _Area:
+    """Where the logo or a block of words is drawn, as far as the layout tells, in percent of
+    the canvas. Neither keeps a height of its own: the words' area is their first line, at
+    their size and the custom layout's line height, and the logo's its width at its file's
+    proportions (an uploaded logo's own, else the kit's), or no height when the file cannot
+    be read."""
+    canvas = kit.post_size
+    if block.kind == "logo":
+        ratio = _picture_ratio(_logo_file(block, kit, uploads_root))
+        height = block.w * canvas.width / canvas.height / ratio if ratio else 0.0
+    else:
+        size = block.size_px or (SUBLINE_PX if block.kind == "subline" else HEADLINE_PX)
+        height = size * _LINE_HEIGHT / canvas.height * 100
+    return (block.x, block.y, block.w, height)
+
+
+def _logo_file(block: Block, kit: BrandKit, uploads_root: Path | None) -> Path:
+    """The file the logo is drawn from: its upload, when it has one among the brand's, or the
+    kit's lockup."""
+    if block.image_path and uploads_root is not None:
+        uploaded = upload_file(block.image_path, uploads_root, kit.id)
+        if uploaded is not None:
+            return uploaded
+    return Path(kit.root) / kit.logos.lockup_file
+
+
+def _picture_ratio(path: Path) -> float | None:
+    """A picture's width over its height, read from its file, or None when it cannot be."""
+    try:
+        with Image.open(path) as picture:
+            width, height = picture.size
+    except Exception:
+        # Any failure to read the file leaves only the logo's top edge to measure.
+        return None
+    return width / height if height else None
+
+
+def _overlap(first: _Area, second: _Area) -> bool:
+    """Whether two areas, each x, y, width and height in percent, share any part."""
+    x1, y1, w1, h1 = first
+    x2, y2, w2, h2 = second
+    return x1 < x2 + w2 and x2 < x1 + w1 and y1 < y2 + h2 and y2 < y1 + h1
 
 
 # ------------------------------------------------------------- the Ask mode's edits (v5)

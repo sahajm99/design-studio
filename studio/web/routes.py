@@ -73,6 +73,7 @@ from studio.library.sources import (
     is_web_link,
 )
 from studio.library.taste import build_taste_profile
+from studio.media import agent_copy_path, agent_picture
 from studio.render import (
     NEEDS_PHOTO,
     allowed_templates,
@@ -86,7 +87,7 @@ from studio.render import (
     face_named,
     shortlist,
 )
-from studio.render.custom import upload_file
+from studio.render.custom import upload_file, uploads_only
 from studio.render.faces import Face
 from studio.store import Store
 from studio.web.jobs import RunJobs
@@ -94,11 +95,9 @@ from studio.web.uploads import (
     MAX_UPLOAD_BYTES,
     UPLOAD_REFUSED,
     UploadRejected,
-    agent_copy_path,
     read_image_upload,
     save_brand_upload,
     upload_extension,
-    write_agent_copy,
 )
 from studio.workflows import (
     Deps,
@@ -116,7 +115,7 @@ from studio.workflows import (
     run_samples,
     run_scout,
 )
-from studio.workflows.shared import QUALITY_BAR_SETTING, designer_references, plural
+from studio.workflows.shared import QUALITY_BAR_SETTING, designer_references, plural, quoted
 
 logger = logging.getLogger(__name__)
 
@@ -1366,13 +1365,18 @@ def _editor_sample(store: Store, session: StudioSession, sample_id: str) -> Samp
     return sample
 
 
-def _starting_layout(store: Store, session: StudioSession, candidate_id: str) -> CustomLayout:
+def _starting_layout(
+    store: Store, session: StudioSession, candidate_id: str, brand_id: str
+) -> CustomLayout:
     """Where the editor starts: the candidate `candidate_id` as blocks, or the default.
 
     The candidate is one of this session's, or, for a session started from a photo, a layout
     of that photo made in its own session (the Editor tab opens a post's arrangement that
-    way). A custom candidate gives back its own arrangement. A template candidate becomes
-    blocks that follow its template, with its shade when it drew one.
+    way). A custom candidate gives back its own arrangement, less any upload no longer among
+    the brand's (one removed in the Library): the render leaves those out, so the canvas
+    never shows one as an empty box, and an uploaded logo's place falls back to the kit's. A
+    template candidate becomes blocks that follow its template, with its shade when it drew
+    one.
     """
     candidate = store.get_layout_candidate(candidate_id) if candidate_id else None
     of_source_photo = (
@@ -1383,9 +1387,11 @@ def _starting_layout(store: Store, session: StudioSession, candidate_id: str) ->
     if candidate is None or (candidate.session_id != session.id and not of_source_photo):
         return default_layout()
     composition = candidate.composition
-    if composition.template == "custom":
-        return composition.custom or default_layout()
-    return blocks_for_template(composition, scrim_added=candidate.render_report.scrim_added)
+    if composition.template != "custom":
+        return blocks_for_template(composition, scrim_added=candidate.render_report.scrim_added)
+    layout = composition.custom or default_layout()
+    blocks = uploads_only(layout.blocks, store.uploads_dir, brand_id)
+    return layout.model_copy(update={"blocks": blocks})
 
 
 def _editor_context(
@@ -1537,26 +1543,8 @@ async def _upload_picture(store: Store, upload: Upload) -> Path:
     """The file the editor agent is sent for an upload (v5): its agent copy, upright and at
     most 2048 pixels on its longer side, written now when it has none, since an upload can
     be 15 MB and goes beside the layout's own picture; or the upload itself when no copy can
-    be written. A copy goes with its upload when the upload is removed."""
-    for transparent in (False, True):
-        copy = agent_copy_path(upload.image_path, transparent=transparent)
-        found = upload_file(copy, store.uploads_dir, upload.brand_id)
-        if found is not None:
-            return found
-    try:
-        relative = await asyncio.to_thread(_write_upload_copy, store, upload)
-        return store.media_path(relative)
-    except Exception as error:
-        # Any failure, Pillow's or the disk's, only costs the agent a smaller picture.
-        logger.warning("The agent copy of an upload was not written: %r", error)
-        return store.media_path(upload.image_path)
-
-
-def _write_upload_copy(store: Store, upload: Upload) -> str:
-    """Write an upload's agent copy from its file, and give back the copy's media path.
-    Reading and decoding are blocking work, so this runs off the event loop."""
-    data = store.media_path(upload.image_path).read_bytes()
-    return write_agent_copy(store, upload.image_path, data)
+    be written. Writing one is blocking work, so it runs off the event loop."""
+    return await asyncio.to_thread(agent_picture, store, upload.image_path)
 
 
 def _edited_layout(
@@ -1635,8 +1623,9 @@ async def _attach_references(
         )
         # Recorded before the analyst is asked, so a card that never comes leaves it in place.
         store.add_session_reference(reference)
-        card_data, card_extension = await _agent_copy(store, upload, data, extension)
-        to_card.append((reference, card_data, card_extension, upload.name))
+        card_data, card_extension = await _agent_copy(store, upload)
+        # The file's name is the designer's, and it goes into the analyst's context.
+        to_card.append((reference, card_data, card_extension, quoted(upload.name)))
     cards = await asyncio.gather(
         *(_reference_card(deps, image, kind, label) for _, image, kind, label in to_card)
     )
@@ -1647,20 +1636,12 @@ async def _attach_references(
     return codes
 
 
-async def _agent_copy(
-    store: Store, upload: Upload, data: bytes, extension: str
-) -> tuple[bytes, str]:
+async def _agent_copy(store: Store, upload: Upload) -> tuple[bytes, str]:
     """Write the reference's agent copy beside its upload, off the event loop, and give back
     what the analyst reads: the copy's bytes and extension. When no copy can be written, the
     original's, which the models are then sent too; a reference never fails for want of one."""
-    try:
-        relative = await asyncio.to_thread(write_agent_copy, store, upload.image_path, data)
-        copy = store.media_path(relative)
-        return copy.read_bytes(), copy.suffix.lstrip(".")
-    except Exception as error:
-        # Any failure, Pillow's or the disk's, only costs the models a smaller picture.
-        logger.warning("The agent copy of a reference was not written: %r", error)
-        return data, extension
+    picture = await asyncio.to_thread(agent_picture, store, upload.image_path)
+    return picture.read_bytes(), picture.suffix.lstrip(".")
 
 
 async def _reference_card(
@@ -2182,7 +2163,7 @@ async def editor_page(
     deps: Deps = request.app.state.deps
     session = _require_session(deps.store, session_id)
     chosen = _editor_sample(deps.store, session, sample)
-    layout = _starting_layout(deps.store, session, from_candidate)
+    layout = _starting_layout(deps.store, session, from_candidate, deps.kit.id)
     return _page(request, "editor.html", _editor_context(deps, session, chosen, layout))
 
 

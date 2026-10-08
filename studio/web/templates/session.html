@@ -123,7 +123,7 @@
           {% endfor %}
         </ul>
         {% endif %}
-        <form method="post" action="/sessions/{{ session.id }}/references" enctype="multipart/form-data" class="upload-form">
+        <form method="post" action="/sessions/{{ session.id }}/references" enctype="multipart/form-data" class="upload-form" data-references-add>
           <label class="sr-only" for="reference-files">Add reference images</label>
           <div class="upload-row">
             <input type="file" id="reference-files" name="references" multiple accept="image/png,image/jpeg" required {{ off }} />
