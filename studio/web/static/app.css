@@ -1294,7 +1294,8 @@ a.badge:hover {
 .sample-card,
 .ref-card,
 .direction-card,
-.upload-card {
+.upload-card,
+.reference-card {
   position: relative;
   min-width: 0;
   border: 1px solid var(--ink-line);
@@ -1600,6 +1601,12 @@ details:not([open]) > summary::after {
   gap: 4px 16px;
 }
 
+/* Reference images (v5): a label over the file button, a hint under. The brief form's rule
+   takes a label's gap away, so this one gives it back. */
+.studio-form .reference-images-field label {
+  margin-bottom: 6px;
+}
+
 .mode-row {
   display: flex;
   flex-wrap: wrap;
@@ -1750,6 +1757,12 @@ details:not([open]) > summary::after {
   .brief-row:has(> .quality-bar-inset) {
     grid-template-columns: minmax(0, 1fr) 8rem;
   }
+
+  /* The references (v5) sit under the brief, so the quality bar spans both rows beside them. */
+  .brief-row > .quality-bar-inset {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
 }
 
 .quality-bar-inset {
@@ -1776,6 +1789,72 @@ details:not([open]) > summary::after {
   width: 100%;
   height: auto;
   border-radius: 8px;
+}
+
+/* The designer's references (v5): a labelled inset holding a row of small soft cards, 96px
+   wide, each with its picture whole on a quiet square, its note and Save, and Remove; Add
+   under the row. The row wraps, two a row on a phone. */
+.references-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.references-title {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.reference-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reference-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 96px;
+  padding: 6px 6px 8px;
+}
+
+.reference-thumb {
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  background: var(--ink-wash);
+}
+
+.reference-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.reference-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* A one-line note in a card this narrow: the system's field at the 32px size of its Save. */
+.reference-note input[type="text"] {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.reference-card .btn-link {
+  font-size: 13px;
 }
 
 .concept-facts dd {

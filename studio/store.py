@@ -975,6 +975,15 @@ class Store:
         with self._connect() as conn:
             conn.execute("DELETE FROM session_references WHERE id = ?", (reference_id,))
 
+    def delete_session_references_for_upload(self, upload_id: str) -> int:
+        """Delete every session's reference to this upload, as the upload leaves the brand's
+        shelf, and give back how many rows went."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM session_references WHERE upload_id = ?", (upload_id,)
+            )
+            return cursor.rowcount
+
 
 def _search_credits_key() -> str:
     """The settings key for this UTC month's search credits, e.g. `search_credits:2026-10`."""

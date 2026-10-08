@@ -55,18 +55,23 @@ from studio.workflows.shared import (
     brand_block,
     clean_hashtags,
     current_version,
+    designer_reference_context,
+    designer_reference_images,
+    designer_references,
+    designer_references_sent,
     existing_media,
     image_part,
+    labelled_parts,
     mentions,
     plural,
     quality_bar,
     quality_bar_parts,
     run_workflow,
     settle,
-    text_message,
     trim_prompt,
     update_session,
     with_backdrop,
+    with_images,
 )
 from studio.workflows.steps import StepInfo, StepRecorder
 
@@ -74,6 +79,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_LIKED_CARDS = 12
 _MAX_REFERENCE_IMAGES = 4
+# The critic sees the designer's first references, no more than this, with each photo (v5).
+_CRITIC_DESIGNER_REFERENCES = 3
 _CRITICS_AT_ONCE = 3
 _MAX_SEED = 2**31 - 1
 
@@ -168,9 +175,12 @@ def _draft_workflow(deps: Deps, run: Run, session: StudioSession) -> Workflow:
             references = store.list_references()
             taste = build_taste_profile(references)
             source = _source_photo(store, session)
+            # The designer's own pictures of this post come right after the brief (v5).
+            designer = designer_references(store, session.id)
+            designer_images = designer_reference_images(store, designer)
             if source is None:
                 bar, bar_label = quality_bar(store, kit)
-                images = _draft_images(store, references, bar)
+                images = _draft_images(store, references, bar, designer_images)
                 verb = "goes" if len(images) == 1 else "go"
                 shown = f"{plural(len(images), 'image')} {verb} with the brief. " + (
                     QUALITY_BAR_NOTE.format(label=bar_label)
@@ -179,9 +189,9 @@ def _draft_workflow(deps: Deps, run: Run, session: StudioSession) -> Workflow:
                 # Words for the chosen photo: the photo goes with the brief and the quality bar
                 # is not sent, so the note does not name one.
                 photo = str(store.media_path(source.image_path))
-                images = [{"label": CHOSEN_PHOTO, "path": photo}]
+                images = [*designer_images, {"label": CHOSEN_PHOTO, "path": photo}]
                 shown = "the chosen photo goes with the brief."
-            ctx.state["prompt_writer_context"] = {
+            context: dict[str, Any] = {
                 "task": "draft" if source is None else "words_for_photo",
                 "brief": session.brief,
                 "brand": brand_block(kit),
@@ -197,10 +207,15 @@ def _draft_workflow(deps: Deps, run: Run, session: StudioSession) -> Workflow:
                 # The direction the designer chose, or auto mode took, from the research (v4).
                 "direction": direction.model_dump(mode="json") if direction else None,
             }
+            # Only a session with references carries them, so one without reads as before.
+            if designer:
+                context["designer_references"] = designer_reference_context(designer)
+            ctx.state["prompt_writer_context"] = context
             ctx.state["prompt_images"] = images
             ctx.state["source_sample"] = source.model_dump(mode="json") if source else None
             liked, disliked = taste.liked_count, taste.disliked_count
             info.note = f"{liked} liked and {disliked} disliked references; {shown}"
+            info.note += designer_references_sent(len(designer))
             if direction is not None:
                 info.note += f' Direction {direction.number}: "{direction.title}".'
             # The prompt writer receives the brief as its message, with the images after it.
@@ -211,7 +226,7 @@ def _draft_workflow(deps: Deps, run: Run, session: StudioSession) -> Workflow:
     ) -> Event:
         async with recorder.step("write_prompt") as info:
             info.provider = describe_llm(deps.llm)
-            message = _with_images(node_input, prompt_images)
+            message = with_images(node_input, prompt_images)
             draft = await ask_prompt_writer(ctx, prompt_writer, message, info)
             info.note = draft.concept.idea if draft.usable else draft.question
             data = draft.model_dump(mode="json")
@@ -255,29 +270,25 @@ def _source_photo(store: Store, session: StudioSession) -> Sample | None:
 
 
 def _draft_images(
-    store: Store, references: list[Reference], bar: Path | None
+    store: Store,
+    references: list[Reference],
+    bar: Path | None,
+    designer_images: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """Up to four liked reference images and the quality bar (`bar`, when there is one), each
-    with its name."""
-    images: list[dict[str, str]] = []
+    """The designer's references first (`designer_images`, already named), then up to four
+    liked reference images and the quality bar (`bar`, when there is one), each with its name."""
+    liked: list[dict[str, str]] = []
     for ref in references:
-        if len(images) == _MAX_REFERENCE_IMAGES:
+        if len(liked) == _MAX_REFERENCE_IMAGES:
             break
         relative = existing_media(store, ref.image_path) if ref.choice == "liked" else None
         if relative is not None:
             label = f"Liked reference: {ref.label or ref.id}"
-            images.append({"label": label, "path": str(store.media_path(relative))})
+            liked.append({"label": label, "path": str(store.media_path(relative))})
+    images = [*designer_images, *liked]
     if bar is not None:
         images.append({"label": IDEAL_EXAMPLE, "path": str(bar)})
     return images
-
-
-def _with_images(brief: str, images: list[dict[str, str]]) -> types.Content:
-    """The brief, then each image after a line naming it."""
-    parts = [types.Part(text=brief)]
-    for image in images:
-        parts += [types.Part(text=image["label"]), image_part(Path(image["path"]))]
-    return types.Content(role="user", parts=parts)
 
 
 def _liked_cards(references: list[Reference]) -> list[dict[str, Any]]:
@@ -465,9 +476,10 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
             ctx.state["critic_context"] = _critic_context(session, version, kit)
             round_samples = [Sample.model_validate(item) for item in samples]
             bar, bar_label = quality_bar(store, kit)
+            reference_parts = _designer_reference_parts(store, session)
             with _kept_if_stopped(store, session, round_samples):
                 await _review_samples(
-                    ctx, critic, store, round_samples, quality_bar_parts(bar), info
+                    ctx, critic, store, round_samples, quality_bar_parts(bar), reference_parts, info
                 )
             info.note = f"{info.note} {QUALITY_BAR_NOTE.format(label=bar_label)}"
             data = [sample.model_dump(mode="json") for sample in round_samples]
@@ -624,6 +636,14 @@ def _critic_context(
     }
 
 
+def _designer_reference_parts(store: Store, session: StudioSession) -> list[types.Part]:
+    """What follows the quality bar in a critic's message (v5): the designer's first three
+    references, each image (its agent copy, as the prompt writer gets) after the line naming
+    it, numbered as the prompt writer saw them. Empty for a session without references."""
+    references = designer_references(store, session.id)[:_CRITIC_DESIGNER_REFERENCES]
+    return labelled_parts(designer_reference_images(store, references))
+
+
 def _layouts_for(session: StudioSession, kit: BrandKit) -> list[LayoutTemplate]:
     """The layouts the prompt writer may choose: the kit's, without type_only in auto mode,
     where every post shows a photograph; the kit's as they are when that would leave none."""
@@ -640,20 +660,25 @@ async def _review_samples(
     store: Store,
     samples: list[Sample],
     bar_parts: list[types.Part],
+    reference_parts: list[types.Part],
     info: StepInfo,
 ) -> None:
     """Give each sample with a photo the critic's review, at most three at a time, and
     recommend the one its scores put first; the ranking may move the recommendation later.
     A sample the critic cannot score keeps the reason instead.
+
+    Each photo goes with the quality bar (`bar_parts`) and, after it, the designer's
+    references (`reference_parts`, v5); either may be empty.
     """
     limit = asyncio.Semaphore(_CRITICS_AT_ONCE)
+    guide_parts = [*bar_parts, *reference_parts]
 
     async def review(sample: Sample) -> float:
         async with limit:
             started = time.monotonic()
             try:
                 image = store.media_path(sample.image_path)
-                sample.review = await _ask_critic(ctx, critic, image, bar_parts)
+                sample.review = await _ask_critic(ctx, critic, image, guide_parts)
             except Exception as error:
                 logger.warning("The critic could not score a sample: %s", type(error).__name__)
                 sample.review_error = CRITIC_FAILED
@@ -669,10 +694,11 @@ async def _review_samples(
 
 
 async def _ask_critic(
-    ctx: Context, critic: LlmAgent, image: Path, bar_parts: list[types.Part]
+    ctx: Context, critic: LlmAgent, image: Path, guide_parts: list[types.Part]
 ) -> SampleReview:
-    """The critic's review of one sample photo, held to the brand's quality bar."""
-    parts = [image_part(image), types.Part(text=JUDGE_THIS_SAMPLE), *bar_parts]
+    """The critic's review of one sample photo, held to the brand's quality bar and the
+    designer's references, which `guide_parts` holds after the photo, each named."""
+    parts = [image_part(image), types.Part(text=JUDGE_THIS_SAMPLE), *guide_parts]
     # Each call runs on a branch of its own, so calls made at the same time never see
     # each other's photo or answer.
     answer = await ctx.run_node(
@@ -797,7 +823,8 @@ def _revise_prompt_workflow(deps: Deps, run: Run, session: StudioSession) -> Wor
         async with recorder.step("load_feedback") as info:
             current = current_version(store, session)
             feedback = _feedback(store, session, current)
-            ctx.state["prompt_writer_context"] = {
+            designer = designer_references(store, session.id)
+            context: dict[str, Any] = {
                 "task": "revise",
                 "brief": session.brief,
                 "brand": brand_block(kit),
@@ -808,17 +835,25 @@ def _revise_prompt_workflow(deps: Deps, run: Run, session: StudioSession) -> Wor
                 "designer_edited": current.author == "designer",
                 **feedback,
             }
+            # Only a session with references carries them, so one without reads as before (v5).
+            if designer:
+                context["designer_references"] = designer_reference_context(designer)
+            ctx.state["prompt_writer_context"] = context
+            ctx.state["prompt_images"] = designer_reference_images(store, designer)
             ctx.state["banned"] = _banned(feedback)
             comment = "a comment" if feedback["round_comment"] else "no comment"
             reactions = len(feedback["reactions"])
             info.note = f"{reactions} reactions and {comment} on round {session.rounds}."
-            # The prompt writer receives the brief as its message.
+            info.note += designer_references_sent(len(designer))
+            # The prompt writer receives the brief as its message, with the references after it.
             return session.brief
 
-    async def rewrite_prompt(ctx: Context, node_input: str, banned: list[str]) -> Event:
+    async def rewrite_prompt(
+        ctx: Context, node_input: str, banned: list[str], prompt_images: list[dict[str, str]]
+    ) -> Event:
         async with recorder.step("rewrite_prompt") as info:
             info.provider = describe_llm(deps.llm)
-            message = text_message(node_input)
+            message = with_images(node_input, prompt_images)
             draft = await ask_prompt_writer(ctx, prompt_writer, message, info)
             kept = [term for term in banned if mentions(draft.photo_prompt, term)]
             if kept:

@@ -93,6 +93,10 @@ PROMPT_WRITER_PROMPT = "\n".join(
         "starting point. Use a fact from it in the caption only when a reader would care to "
         "know it, with nothing added, and never advice about marketing or posting. Facts "
         "about the brand come only from the brief.",
+        "designer_references are the designer's own pictures of how this post should look, each "
+        "arriving after the line naming it. Draw on their subject, composition, light, materials "
+        "and mood as the brief's intent, in the order they are given; say in reason_prompt what "
+        "you took from each; never describe their text or logos; never copy one.",
         "When the direction's format is statement, or the layout is type_only, the photograph "
         "is a backdrop for the words: describe a quiet, even surface or texture in the mode's "
         "backdrop colour, in soft light, with nothing else in the frame.",
@@ -138,6 +142,9 @@ CRITIC_PROMPT = "\n".join(
         "The photograph arrives first in the message. When the brand has an ideal example, it "
         "follows after the line \"The brand's quality bar.\": hold the photograph to that bar, "
         "and never judge the example itself.",
+        "When the designer's references follow, labelled, they show what this post should look "
+        "like: hold the photograph to the quality bar for finish, and judge on_brief against the "
+        "prompt and those references.",
         "The context holds the prompt the photograph was made from, layout, the layout the "
         "studio will set the words in, direction, the direction the post follows when there is "
         "one, the post's concept and the brand's feel.",
@@ -300,6 +307,8 @@ DIRECTIONS_PROMPT = "\n".join(
         "recent_concepts) unless the brief asks for it.",
         "When previous_directions is given, write three directions different from them in kind "
         "of picture, subject and angle.",
+        "When designer_references is given, the directions fit what the designer showed: its "
+        "subjects, framing and mood.",
         "Write why as one sentence, tied to the research.",
         "Recommend one direction and give the reason in one sentence: its number in recommended, "
         "the reason in recommended_reason.",

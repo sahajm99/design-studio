@@ -65,8 +65,9 @@
     </ul>
     {% endif %}
 
-    {% if post.auto_summary %}
-    <p class="auto-summary">{{ post.auto_summary }}</p>
+    {#- The auto session's summary, then how many references the session has (v5). #}
+    {% if summary_line %}
+    <p class="auto-summary">{{ summary_line }}</p>
     {% endif %}
 
     <details class="why-panel" open>

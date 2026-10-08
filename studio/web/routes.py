@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import io
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,7 +52,9 @@ from studio.contracts import (
     Sample,
     Scrim,
     SessionMode,
+    SessionReference,
     StudioSession,
+    StyleCard,
     TextAlign,
     TextPosition,
     Upload,
@@ -88,12 +91,15 @@ from studio.web.uploads import (
     MAX_UPLOAD_BYTES,
     UPLOAD_REFUSED,
     UploadRejected,
+    agent_copy_path,
     read_image_upload,
     save_brand_upload,
     upload_extension,
+    write_agent_copy,
 )
 from studio.workflows import (
     Deps,
+    analyse_reference,
     directions_alike,
     pick_source_photo,
     quality_bar,
@@ -106,7 +112,9 @@ from studio.workflows import (
     run_samples,
     run_scout,
 )
-from studio.workflows.shared import QUALITY_BAR_SETTING, plural
+from studio.workflows.shared import QUALITY_BAR_SETTING, designer_references, plural
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -258,6 +266,23 @@ _DIRECTION_FORMATS: tuple[str, ...] = get_args(DirectionFormat)
 # What "Edit and use" keeps of each field the designer types.
 _MAX_DIRECTION_FIELD_CHARS = 400
 _MAX_DIRECTION_FACTS = 6
+
+# v5: the designer's references on a session. A session keeps six at most, and a note is one
+# line of at most 80 characters, as SessionReference allows.
+_MAX_SESSION_REFERENCES = 6
+_MAX_REFERENCE_NOTE_CHARS = 80
+# The session page's status line after references were sent, by the code its address
+# carries: more files than the six a session keeps, or a file the studio cannot use.
+_REFERENCES_LIMITED = "Six references kept; the rest were left out."
+_REFERENCE_STATUS_LINES: dict[str, str] = {
+    "limited": _REFERENCES_LIMITED,
+    "refused": UPLOAD_REFUSED,
+}
+# The analyst cards a reference as it is uploaded, and is waited for this long at most.
+_REFERENCE_CARD_SECONDS = 20
+_REFERENCE_MIME_TYPES: dict[str, str] = {"png": "image/png", "jpg": "image/jpeg"}
+# The post page's summary line ends with how many references the post's session has.
+_MADE_WITH_REFERENCES = " Made with {references}."
 
 
 class ChoiceBody(BaseModel):
@@ -566,9 +591,22 @@ def _post_context(
         "reference_thumbs": reference_thumbs,
         "sample": sample,
         "editor_from": _editor_start_candidate(store, post),
+        "summary_line": _summary_line(store, post),
         "error": error,
         "message": message,
     }
+
+
+def _summary_line(store: Store, post: Post) -> str:
+    """The post page's summary line: the auto session's summary, when an auto session made
+    the post, then how many references the post's session has, counted now (v5). "" when
+    there is neither."""
+    count = len(designer_references(store, post.session_id))
+    if not count:
+        return post.auto_summary
+    made_with = _MADE_WITH_REFERENCES.format(references=plural(count, "reference"))
+    # A post made by hand has no auto summary, so its line is the count alone.
+    return f"{post.auto_summary}{made_with}".strip()
 
 
 def _library_context(
@@ -1101,7 +1139,10 @@ def _draft_with_direction(
     return RedirectResponse(url=f"/sessions/{session.id}", status_code=303)
 
 
-def _session_context(deps: Deps, session: StudioSession, *, error: str | None = None) -> dict[str, Any]:
+def _session_context(
+    deps: Deps, session: StudioSession, *, error: str | None = None, references_line: str = ""
+) -> dict[str, Any]:
+    """The session page. `references_line` is the status line after references were sent."""
     store = deps.store
     versions = store.list_prompt_versions(session.id)
     current = next((version for version in versions if version.id == session.current_prompt_version_id), None)
@@ -1149,6 +1190,9 @@ def _session_context(deps: Deps, session: StudioSession, *, error: str | None = 
         else None,
         "source_sample": store.get_sample(session.source_sample_id) if session.source_sample_id else None,
         "draft_button_label": "Draft again" if session.current_prompt_version_id else "Draft",
+        # v5: the designer's references, oldest first, beside the quality bar.
+        "references": designer_references(store, session.id),
+        "references_line": references_line,
         **_layout_context(deps, session),
         **_research_parts_context(deps, session, scout_running=scout_running),
         "error": error,
@@ -1446,6 +1490,130 @@ def _save_upload(store: Store, session: StudioSession, data: bytes, extension: s
     return sample
 
 
+# ------------------------------------------------------- session references (v5)
+
+
+async def _attach_references(
+    deps: Deps, session: StudioSession, files: list[UploadFile]
+) -> list[str]:
+    """Keep the chosen files as the session's references, in the order given, until it has
+    six, and give back the codes of what the session page's status line should say.
+
+    Each file is read and checked as every upload is, kept on the brand's shelf, given its
+    agent copy and recorded on the session. A file the studio cannot use is skipped
+    ("refused"); once the session has six, the files left are not read ("limited"). Then the
+    analyst cards them all at once, so the wait is one card's at most, never six in a row.
+    """
+    store = deps.store
+    room = _MAX_SESSION_REFERENCES - len(designer_references(store, session.id))
+    codes: list[str] = []
+    # Each reference with what its card is made from: bytes, their extension and a label.
+    to_card: list[tuple[SessionReference, bytes, str, str]] = []
+    for file in files:
+        if not file.filename and not file.size:
+            continue  # the empty part a browser sends when no file was chosen
+        if len(to_card) >= room:
+            codes.append("limited")
+            break
+        try:
+            data, extension, width, height = await read_image_upload(file)
+        except UploadRejected:
+            if "refused" not in codes:
+                codes.append("refused")
+            continue
+        upload = save_brand_upload(
+            store,
+            deps.kit.id,
+            name=Path(file.filename or "").name,
+            data=data,
+            extension=extension,
+            width=width,
+            height=height,
+            source="session",
+        )
+        reference = SessionReference(
+            session_id=session.id, upload_id=upload.id, image_path=upload.image_path
+        )
+        # Recorded before the analyst is asked, so a card that never comes leaves it in place.
+        store.add_session_reference(reference)
+        card_data, card_extension = await _agent_copy(store, upload, data, extension)
+        to_card.append((reference, card_data, card_extension, upload.name))
+    cards = await asyncio.gather(
+        *(_reference_card(deps, image, kind, label) for _, image, kind, label in to_card)
+    )
+    for (reference, *_), card in zip(to_card, cards, strict=True):
+        if card is not None:
+            reference.card = card
+            store.update_session_reference(reference)
+    return codes
+
+
+async def _agent_copy(
+    store: Store, upload: Upload, data: bytes, extension: str
+) -> tuple[bytes, str]:
+    """Write the reference's agent copy beside its upload, off the event loop, and give back
+    what the analyst reads: the copy's bytes and extension. When no copy can be written, the
+    original's, which the models are then sent too; a reference never fails for want of one."""
+    try:
+        relative = await asyncio.to_thread(write_agent_copy, store, upload.image_path, data)
+        copy = store.media_path(relative)
+        return copy.read_bytes(), copy.suffix.lstrip(".")
+    except Exception as error:
+        # Any failure, Pillow's or the disk's, only costs the models a smaller picture.
+        logger.warning("The agent copy of a reference was not written: %r", error)
+        return data, extension
+
+
+async def _reference_card(
+    deps: Deps, data: bytes, extension: str, label: str
+) -> StyleCard | None:
+    """The analyst's style card for one reference image, written as it is uploaded, through
+    the Library's own analysis. None when no card comes: a model error, an answer that does
+    not fit, or no answer within 20 seconds; the reference is kept either way. In demo mode
+    the stand-in analyst answers."""
+    try:
+        return await asyncio.wait_for(
+            analyse_reference(deps.llm, data, _REFERENCE_MIME_TYPES[extension], label=label),
+            timeout=_REFERENCE_CARD_SECONDS,
+        )
+    except Exception as error:
+        # Only the type: the text of a model error may hold a request address.
+        logger.warning("The analyst could not card a session reference: %s", type(error).__name__)
+        return None
+
+
+def _references_address(session_id: str, codes: list[str], *, fragment: str = "") -> str:
+    """The session page's address after references were sent, with each status code in its
+    query (`references=limited`) and an optional fragment to land on."""
+    query = urlencode([("references", code) for code in codes])
+    address = f"/sessions/{session_id}?{query}" if query else f"/sessions/{session_id}"
+    return f"{address}#{fragment}" if fragment else address
+
+
+def _references_status_line(codes: list[str]) -> str:
+    """The session page's status line for the codes its address carries, in a fixed order;
+    "" for none. A code the studio does not know is ignored."""
+    return " ".join(line for code, line in _REFERENCE_STATUS_LINES.items() if code in codes)
+
+
+def _session_reference(
+    store: Store, session: StudioSession, reference_id: str
+) -> SessionReference:
+    """The session's reference `reference_id`. 404 when the session has none by that id."""
+    found = next(
+        (item for item in store.list_session_references(session.id) if item.id == reference_id),
+        None,
+    )
+    if found is None:
+        raise _not_found()
+    return found
+
+
+def _reference_note(value: str) -> str:
+    """A typed note as one line, cut to the 80 characters a reference's note holds."""
+    return " ".join(value.split())[:_MAX_REFERENCE_NOTE_CHARS].strip()
+
+
 # ---------------------------------------------------------------------- pages
 
 
@@ -1471,6 +1639,7 @@ async def create_session(
     stop_score: Annotated[float, Form()] = 4.2,
     research: Annotated[bool | None, Form()] = None,
     research_choice: Annotated[bool, Form()] = False,
+    references: Annotated[list[UploadFile] | None, File()] = None,
 ) -> Response:
     """Start a session from the brief: a draft by hand, or the whole session on its own in auto mode.
 
@@ -1479,6 +1648,10 @@ async def create_session(
     own stage. An unticked box sends nothing, so the page's script also sends the box's
     hidden companion (`research_choice`): with it, the box is followed as it is. With neither
     (no script ran), the field is absent, and an auto session researches by default.
+
+    The reference images (v5) are kept on the session before its first run starts, so every
+    agent of that run sees them; files past the sixth, and files the studio cannot use, are
+    left out and the session page's status line says so.
     """
     deps: Deps = request.app.state.deps
     stripped = brief.strip()
@@ -1503,6 +1676,7 @@ async def create_session(
         session.auto_settings = _auto_settings(max_rounds, photo_budget, stop_score)
         session.auto_state = AutoState()
     deps.store.save_session(session)
+    codes = await _attach_references(deps, session, references or [])
 
     kind: RunKind = "auto" if mode == "auto" else "scout" if session.research_on else "draft"
     run = deps.store.create_run(kind, deps.kit.id, brief=session.brief, session_id=session.id)
@@ -1517,14 +1691,63 @@ async def create_session(
         jobs.start(run.id, run_scout(deps, run, session))
     else:
         jobs.start(run.id, run_draft(deps, run, session))
-    return RedirectResponse(url=f"/sessions/{session.id}", status_code=303)
+    return RedirectResponse(url=_references_address(session.id, codes), status_code=303)
 
 
 @router.get("/sessions/{session_id}")
-async def session_page(request: Request, session_id: str) -> Response:
+async def session_page(
+    request: Request,
+    session_id: str,
+    reference_codes: Annotated[list[str] | None, Query(alias="references")] = None,
+) -> Response:
+    """The session page; `references` in its address names what its status line says after
+    references were sent."""
     deps: Deps = request.app.state.deps
     session = _require_session(deps.store, session_id)
-    return _page(request, "session.html", _session_context(deps, session))
+    line = _references_status_line(reference_codes or [])
+    return _page(request, "session.html", _session_context(deps, session, references_line=line))
+
+
+@router.post("/sessions/{session_id}/references")
+async def add_references(
+    request: Request,
+    session_id: str,
+    references: Annotated[list[UploadFile] | None, File()] = None,
+) -> RedirectResponse:
+    """Add the session page's chosen files to the session's references, up to six in all, and
+    go back to its References group, whose status line says what was left out."""
+    deps: Deps = request.app.state.deps
+    session = _require_session(deps.store, session_id)
+    codes = await _attach_references(deps, session, references or [])
+    return RedirectResponse(
+        url=_references_address(session.id, codes, fragment="references"), status_code=303
+    )
+
+
+@router.post("/sessions/{session_id}/references/{reference_id}/note")
+async def save_reference_note(
+    request: Request, session_id: str, reference_id: str, note: Annotated[str, Form()] = ""
+) -> RedirectResponse:
+    """Save a reference's note as one line of at most 80 characters; blank clears it."""
+    store: Store = request.app.state.store
+    session = _require_session(store, session_id)
+    reference = _session_reference(store, session, reference_id)
+    reference.note = _reference_note(note)
+    store.update_session_reference(reference)
+    return RedirectResponse(url=f"/sessions/{session.id}#references", status_code=303)
+
+
+@router.post("/sessions/{session_id}/references/{reference_id}/remove")
+async def remove_reference(
+    request: Request, session_id: str, reference_id: str
+) -> RedirectResponse:
+    """Take a reference off the session. Its upload stays on the brand's shelf, where the
+    editor's picker and the Library still offer it."""
+    store: Store = request.app.state.store
+    session = _require_session(store, session_id)
+    reference = _session_reference(store, session, reference_id)
+    store.delete_session_reference(reference.id)
+    return RedirectResponse(url=f"/sessions/{session.id}#references", status_code=303)
 
 
 @router.post("/sessions/{session_id}/brief")
@@ -2182,20 +2405,24 @@ async def brand_uploads(request: Request) -> JSONResponse:
 
 @router.post("/uploads/{upload_id}/remove")
 async def remove_upload(request: Request, upload_id: str) -> RedirectResponse:
-    """Take an upload off the brand's shelf: its file, then its row, and back to the Library.
+    """Take an upload off the brand's shelf: its file and its agent copy, every session
+    reference that used it, then its row, and back to the Library.
 
     A saved post that places it keeps its rendered picture, but a later render leaves the
-    image out, as the Library's hint says.
+    image out, as the Library's hint says; the hint also says the references go.
     """
     deps: Deps = request.app.state.deps
     store = deps.store
     upload = store.get_upload(upload_id)
     if upload is None or upload.brand_id != deps.kit.id:
         raise _not_found()
-    # Only a file in the brand's uploads folder is deleted, whatever path the row holds.
-    path = upload_file(upload.image_path, store.uploads_dir, upload.brand_id)
-    if path is not None:
-        path.unlink(missing_ok=True)
+    # Only files in the brand's uploads folder are deleted, whatever path the row holds.
+    copies = [agent_copy_path(upload.image_path, transparent=alpha) for alpha in (False, True)]
+    for image_path in (upload.image_path, *copies):
+        path = upload_file(image_path, store.uploads_dir, upload.brand_id)
+        if path is not None:
+            path.unlink(missing_ok=True)
+    store.delete_session_references_for_upload(upload.id)
     store.delete_upload(upload.id)
     return RedirectResponse(url="/library#uploads", status_code=303)
 

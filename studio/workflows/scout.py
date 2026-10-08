@@ -54,6 +54,8 @@ from studio.workflows.shared import (
     Deps,
     _first_validation_message,
     brand_block,
+    designer_reference_context,
+    designer_references,
     mentions,
     plural,
     run_workflow,
@@ -647,7 +649,8 @@ def _directions_context(
     with its numbered sources when it is grounded or the kit's occasions when it is not, the
     taste summary, the recent headlines and concepts, and the topics to avoid. For "Other
     directions" (`from_research`), also the session's current directions, which the new set
-    must differ from."""
+    must differ from. When the session has references (v5), their notes and cards, without
+    the images."""
     store, kit = deps.store, deps.kit
     policy = kit.research
     grounded = research.status != "ungrounded"
@@ -680,6 +683,9 @@ def _directions_context(
             }
             for direction in session.directions
         ]
+    designer = designer_references(store, session.id)
+    if designer:
+        context["designer_references"] = designer_reference_context(designer)
     return context
 
 

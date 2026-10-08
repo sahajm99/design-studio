@@ -35,6 +35,7 @@ from studio.contracts import (
     PromptVersion,
     QualityBar,
     Run,
+    SessionReference,
     StudioSession,
     new_id,
 )
@@ -42,6 +43,7 @@ from studio.photos.base import PhotoProvider
 from studio.render import CUSTOM_DOES_NOT_FIT, Renderer
 from studio.research.base import SearchProvider
 from studio.store import Store
+from studio.web.uploads import agent_copy_path
 from studio.workflows.steps import StepInfo, readable_error
 
 logger = logging.getLogger(__name__)
@@ -85,6 +87,12 @@ QUALITY_BAR = "The brand's quality bar."
 QUALITY_BAR_SET_BY_YOU = "set by you from {label}"
 QUALITY_BAR_KIT = "the kit's example"
 QUALITY_BAR_NONE = "none"
+# The line before each of the designer's references in an agent's message (v5), with the
+# reference's note when it has one.
+DESIGNER_REFERENCE = "Designer's reference {number}"
+DESIGNER_REFERENCE_WITH_NOTE = "Designer's reference {number}: {note}"
+# Ends the note of a step that sent the designer's references, "2 designer references".
+DESIGNER_REFERENCES_SENT = " {references} sent."
 
 
 class DraftInvalid(ValueError):
@@ -353,6 +361,80 @@ def quality_bar_parts(bar: Path | None) -> list[types.Part]:
     return [types.Part(text=QUALITY_BAR), image_part(bar)] if bar is not None else []
 
 
+# ------------------------------------------------------- the designer's references (v5)
+
+
+def designer_references(store: Store, session_id: str | None) -> list[SessionReference]:
+    """The session's references whose image is still in the data folder, oldest first; none
+    without a session (a post can have none).
+
+    Removing an upload in the Library takes its references off every session. A reference
+    whose file has gone some other way is left out everywhere, so the session page, the six
+    a session takes, the agents and the post page's count still agree.
+    """
+    if not session_id:
+        return []
+    return [
+        reference
+        for reference in store.list_session_references(session_id)
+        if existing_media(store, reference.image_path) is not None
+    ]
+
+
+def designer_reference_label(number: int, note: str) -> str:
+    """The line naming a designer's reference before its image: its number, and its note when
+    it has one."""
+    if note.strip():
+        return DESIGNER_REFERENCE_WITH_NOTE.format(number=number, note=note.strip())
+    return DESIGNER_REFERENCE.format(number=number)
+
+
+def designer_reference_context(references: list[SessionReference]) -> list[dict[str, Any]]:
+    """The references as an agent's context carries them, in their order and numbered from 1:
+    each one's number, note and the analyst's card, None when no card could be written."""
+    return [
+        {
+            "number": number,
+            "note": reference.note,
+            "card": reference.card.model_dump(mode="json") if reference.card else None,
+        }
+        for number, reference in enumerate(references, start=1)
+    ]
+
+
+def designer_reference_images(
+    store: Store, references: list[SessionReference]
+) -> list[dict[str, str]]:
+    """Each reference's image with the line naming it, numbered as the context numbers them.
+    The image is the reference's agent copy, upright and at most 2048 pixels on its longer
+    side, or the upload itself when it has no copy."""
+    return [
+        {
+            "label": designer_reference_label(number, reference.note),
+            "path": str(_agent_image(store, reference.image_path)),
+        }
+        for number, reference in enumerate(references, start=1)
+    ]
+
+
+def _agent_image(store: Store, image_path: str) -> Path:
+    """The file the models are sent for an upload: its agent copy, a JPEG or, for a picture
+    with transparency, a PNG; or the upload itself, for a reference attached before the copies
+    were made or one whose copy could not be written."""
+    for transparent in (False, True):
+        relative = existing_media(store, agent_copy_path(image_path, transparent=transparent))
+        if relative is not None:
+            return store.media_path(relative)
+    return store.media_path(image_path)
+
+
+def designer_references_sent(count: int) -> str:
+    """The sentence a step's note gains when it sent `count` designer references, or ""."""
+    if not count:
+        return ""
+    return DESIGNER_REFERENCES_SENT.format(references=plural(count, "designer reference"))
+
+
 def plural(count: int, noun: str) -> str:
     """The count with its noun, which takes an "s" for any count but one: "1 round", "2 rounds"."""
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
@@ -405,6 +487,21 @@ def existing_media(store: Store, relative: str | None) -> str | None:
 
 def text_message(text: str) -> types.Content:
     return types.Content(role="user", parts=[types.Part(text=text)])
+
+
+def with_images(text: str, images: list[dict[str, str]]) -> types.Content:
+    """The text, then each image after a line naming it. With no images it is the same
+    message as `text_message`."""
+    return types.Content(role="user", parts=[types.Part(text=text), *labelled_parts(images)])
+
+
+def labelled_parts(images: list[dict[str, str]]) -> list[types.Part]:
+    """Each image (`{label, path}`) as two parts of a model message: the line naming it, then
+    the image."""
+    parts: list[types.Part] = []
+    for image in images:
+        parts += [types.Part(text=image["label"]), image_part(Path(image["path"]))]
+    return parts
 
 
 def image_part(path: Path) -> types.Part:

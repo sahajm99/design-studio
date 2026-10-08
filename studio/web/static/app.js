@@ -2,8 +2,8 @@
 // Every page works from its server-rendered HTML alone; this file only adds
 // the live-updating touches (the theme toggle, the bar condensing as the page
 // scrolls, the library's choices and progress line, the Studio form's auto
-// limits and "Research first", the run and session pages' polling, the session
-// page's directions, the post page's copy button).
+// limits, "Research first" and Start, the run and session pages' polling, the
+// session page's directions and reference notes, the post page's copy button).
 (() => {
   "use strict";
 
@@ -163,6 +163,19 @@
           if (radio.checked) research.checked = radio.value === "auto";
         }),
       );
+    }
+
+    // Start waits while the analyst cards the reference images, so it is turned off once
+    // pressed: a second press would start a second session. A page shown again from the
+    // browser's history gets it back.
+    const start = form.querySelector('button[type="submit"]');
+    if (start) {
+      form.addEventListener("submit", () => {
+        start.disabled = true;
+      });
+      window.addEventListener("pageshow", (event) => {
+        if (event.persisted) start.disabled = false;
+      });
     }
 
     const budget = limits.querySelector('input[name="photo_budget"]');
@@ -416,6 +429,7 @@
 
     document.addEventListener("click", onSampleReactionClick);
     document.addEventListener("focusout", onSampleCommentBlur);
+    document.addEventListener("focusout", onReferenceNoteBlur);
     initAdjustForms();
     initDirections();
 
@@ -468,6 +482,31 @@
     const card = field.closest(".sample-card");
     if (!card) return;
     await postSampleReaction(card.dataset.sampleId, card.dataset.reaction, field.value);
+  }
+
+  // A reference's note saves itself as its field loses focus, when it changed, as a sample's
+  // comment does: notes typed in two cards are both kept, whichever Save is pressed. It posts
+  // to the note's own form, whose answer is a redirect to the page; that page is not needed.
+  async function onReferenceNoteBlur(event) {
+    const field = event.target;
+    if (!field.matches || !field.matches("[data-reference-note]") || !field.form) return;
+    if (field.value === field.defaultValue) return;
+    const note = field.value;
+    let response;
+    try {
+      response = await fetch(field.form.action, {
+        method: "POST",
+        body: new URLSearchParams({ note }),
+        redirect: "manual",
+        // The page may be left at once, by this card's Save or another's.
+        keepalive: true,
+      });
+    } catch {
+      return; // offline, or the server went away: the words stay in the field for Save
+    }
+    if (response.type !== "opaqueredirect" && !response.ok) return;
+    field.defaultValue = note;
+    field.title = note.trim();
   }
 
   async function pollSession(sessionId) {

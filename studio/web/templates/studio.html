@@ -9,7 +9,7 @@
 </header>
 
 <section class="panel">
-  <form method="post" action="/sessions" class="brief-form studio-form">
+  <form method="post" action="/sessions" enctype="multipart/form-data" class="brief-form studio-form">
     <p class="meta studio-counts">
       <span>Photos made today: <span class="tabular">{{ photos_today }}</span></span>
       {% if research_enabled %}<span>Searches this month: <span class="tabular">{{ searches_this_month }} of {{ search_limit }}</span></span>{% endif %}
@@ -25,6 +25,12 @@
       placeholder="Announce our free consultation week to new patients."
       required
     >{{ brief_value }}</textarea>
+    {#- The designer's own pictures of how this post should look (v5); the server keeps six. #}
+    <div class="field reference-images-field">
+      <label for="references">Reference images</label>
+      <input type="file" id="references" name="references" multiple accept="image/png,image/jpeg" />
+      <p class="hint">How this post should look. The studio draws on them and never copies them. Up to six.</p>
+    </div>
     <div class="mode-row">
       <fieldset class="pill-group mode-switch">
         <legend class="sr-only">Mode</legend>

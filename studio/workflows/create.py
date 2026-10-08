@@ -30,14 +30,18 @@ from studio.workflows.shared import (
     ask_prompt_writer,
     brand_block,
     clean_hashtags,
+    designer_reference_context,
+    designer_reference_images,
+    designer_references,
+    designer_references_sent,
     existing_media,
     place_in_history,
     render_post,
     run_workflow,
     saved_post,
     settle,
-    text_message,
     update_session,
+    with_images,
 )
 from studio.workflows.steps import StepRecorder
 
@@ -144,7 +148,9 @@ def _words_workflow(deps: Deps, run: Run) -> Workflow:
         async with recorder.step("load_context") as info:
             previous = _parent_post(store, run)
             session = store.get_session(previous.session_id) if previous.session_id else None
-            ctx.state["prompt_writer_context"] = {
+            # The references of the post's session, which a post with no session lacks (v5).
+            designer = designer_references(store, session.id if session else None)
+            context: dict[str, Any] = {
                 "task": "words",
                 "brief": previous.brief,
                 "brand": brand_block(kit),
@@ -153,18 +159,30 @@ def _words_workflow(deps: Deps, run: Run) -> Workflow:
                 # The prompt writer's layout rule names these (v3.1); only type_only is taken.
                 "allowed_layouts": allowed_templates(kit),
             }
+            # Only a session with references carries them, so one without reads as before.
+            if designer:
+                context["designer_references"] = designer_reference_context(designer)
+            ctx.state["prompt_writer_context"] = context
+            ctx.state["prompt_images"] = designer_reference_images(store, designer)
             ctx.state["previous_post"] = previous.model_dump(mode="json")
             ctx.state["session_id"] = session.id if session else None
             info.note = f"Revising version {previous.version}."
-            # The prompt writer receives the post's brief as its message.
+            info.note += designer_references_sent(len(designer))
+            # The prompt writer receives the post's brief as its message, with the references
+            # after it.
             return previous.brief
 
     async def rewrite_words(
-        ctx: Context, node_input: str, previous_post: dict[str, Any], session_id: str | None
+        ctx: Context,
+        node_input: str,
+        previous_post: dict[str, Any],
+        session_id: str | None,
+        prompt_images: list[dict[str, str]],
     ) -> Event:
         async with recorder.step("rewrite_words") as info:
             info.provider = describe_llm(deps.llm)
-            draft = await ask_prompt_writer(ctx, prompt_writer, text_message(node_input), info)
+            message = with_images(node_input, prompt_images)
+            draft = await ask_prompt_writer(ctx, prompt_writer, message, info)
             # A post with no session has nowhere to send a request for a new photo.
             scope = draft.scope if session_id else "words"
             overruled = scope == "words" and session_id is not None and _reads_as_photo(run.comment)

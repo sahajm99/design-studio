@@ -97,6 +97,41 @@
         <img src="{{ quality_bar_url }}" alt="" />
       </a>
       {% endif %}
+      {#- The designer's own pictures of how this post should look (v5), under the brief and
+          beside the quality bar: each with its note, Save and Remove, and Add under the row. #}
+      <div class="inset references-group" id="references" role="group" aria-labelledby="references-title">
+        <p class="references-title" id="references-title">References</p>
+        {% if references_line %}
+        <p class="result-message" role="status">{{ references_line }}</p>
+        {% endif %}
+        {% if references %}
+        <ul class="reference-row">
+          {% for reference in references %}
+          <li class="reference-card">
+            <span class="reference-thumb"><img src="/media/{{ reference.image_path }}" alt="Reference {{ loop.index }}" loading="lazy" /></span>
+            <form method="post" action="/sessions/{{ session.id }}/references/{{ reference.id }}/note" class="reference-note">
+              <label class="sr-only" for="reference-note-{{ reference.id }}">Note on reference {{ loop.index }}</label>
+              {#- The card shows a few words of the note, so its title holds all of it; the field
+                  also saves itself as it loses focus (app.js). #}
+              <input type="text" id="reference-note-{{ reference.id }}" name="note" value="{{ reference.note }}" title="{{ reference.note }}" maxlength="80" placeholder="Note" data-reference-note {{ off }} />
+              <button type="submit" class="btn btn-small" {{ off }}>Save</button>
+            </form>
+            <form method="post" action="/sessions/{{ session.id }}/references/{{ reference.id }}/remove" class="inline-form">
+              <button type="submit" class="btn-link" {{ off }}>Remove</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        <form method="post" action="/sessions/{{ session.id }}/references" enctype="multipart/form-data" class="upload-form">
+          <label class="sr-only" for="reference-files">Add reference images</label>
+          <div class="upload-row">
+            <input type="file" id="reference-files" name="references" multiple accept="image/png,image/jpeg" required {{ off }} />
+            <button type="submit" class="btn" {{ off }}>Add</button>
+          </div>
+          {% if not references %}<p class="hint">Pictures of how this post should look.</p>{% endif %}
+        </form>
+      </div>
     </div>
 
     {% if session.concept %}
