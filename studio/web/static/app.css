@@ -454,6 +454,21 @@ time {
   .bar-item {
     padding: 0 12px;
   }
+
+  /* v6: six items leave no room for the name beside the lockup, so here it is kept for a
+     screen reader only, as on a phone; it comes back from 1024px. */
+  .bar-rule {
+    display: none;
+  }
+
+  .bar-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
 }
 
 /* The theme toggle: a round ghost button at the bar's right end, after the items. */
@@ -909,6 +924,7 @@ label {
 }
 
 input[type="text"],
+input[type="password"],
 input[type="number"],
 select,
 textarea {
@@ -955,6 +971,7 @@ textarea::placeholder {
 }
 
 input[type="text"]:hover,
+input[type="password"]:hover,
 input[type="number"]:hover,
 select:hover,
 textarea:hover {
@@ -962,6 +979,7 @@ textarea:hover {
 }
 
 input[type="text"]:focus,
+input[type="password"]:focus,
 input[type="number"]:focus,
 select:focus,
 textarea:focus {
@@ -971,6 +989,7 @@ textarea:focus {
 }
 
 input[type="text"]:disabled,
+input[type="password"]:disabled,
 input[type="number"]:disabled,
 select:disabled,
 textarea:disabled {
@@ -2214,6 +2233,19 @@ details.panel[open] > summary {
   margin-top: 0;
 }
 
+/* v6: under a round's title, a compare round's models and cost, or the model that stood in
+   for one no longer available. Meta words, figures lined up. */
+.round-meta {
+  margin-bottom: 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.round-meta + .sample-grid {
+  margin-top: 0;
+}
+
 /* A sample: the photo, then what the critic said, the reactions and the next steps. */
 .sample-card {
   display: flex;
@@ -2925,6 +2957,22 @@ details.panel[open] > summary {
 
 .archive-actions .btn-link {
   font-size: 13px;
+}
+
+/* v6: the Model filter sits under the archive's filters, named by a faint label. */
+.archive-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.filter-label {
+  align-self: center;
+  margin-right: 4px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 /* Runs: a table of every run, its stages indented under it. */
@@ -3748,6 +3796,297 @@ details.panel[open] > summary {
 
 .swatch-group .swatch-name {
   margin: 8px 0 0;
+}
+
+/* -------------------------------------------------------- image models (v6) */
+
+/* The Model picker beside "Samples a round", and auto mode's Photo model: wide enough for a
+   model's name and price, and its own line on a phone. */
+.model-field {
+  flex: 1 1 16rem;
+  min-width: 0;
+  max-width: 26rem;
+}
+
+.studio-settings .model-field {
+  flex: 1 1 18rem;
+}
+
+/* The session page keeps "Samples a round" and the Model picker side by side: they wrap as
+   one group when the row is full. */
+.round-settings {
+  display: flex;
+  flex: 1 1 28rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px 24px;
+  min-width: 0;
+}
+
+/* Compare models: a disclosure under the picker, its choices one a line, its button under. */
+.compare-models > summary {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.compare-models[open] > summary {
+  margin-bottom: 12px;
+}
+
+.compare-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.compare-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.compare-list .check-option,
+.model-controls .check-option {
+  font-size: 13px;
+}
+
+.compare-fieldset .hint {
+  margin: 0;
+}
+
+.sample-error a {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* Settings: a soft card per provider inside the Image models surface, its models as a dense
+   list with hairlines between them. */
+.settings-alert {
+  margin-bottom: 12px;
+}
+
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--ink-line);
+  border-radius: 16px;
+  background: var(--white);
+  box-shadow: var(--shadow-soft);
+  scroll-margin-top: 96px;
+}
+
+.provider-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+/* The status pill: neutral for "Not set up", success for "Ready" and "Free", danger for a
+   refused key; the tint is the status colour, the words its darker text colour. */
+.provider-status.is-success {
+  background: color-mix(in srgb, var(--status-made) 14%, transparent);
+  color: var(--text-success);
+}
+
+.provider-status.is-danger {
+  background: color-mix(in srgb, var(--status-cancelled) 14%, transparent);
+  color: var(--text-danger);
+}
+
+.provider-key-line {
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-key-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.provider-check,
+.settings-result {
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.provider-check {
+  color: var(--ink);
+}
+
+.provider-check.is-failed {
+  color: var(--text-danger);
+}
+
+.provider-note {
+  margin: 0;
+}
+
+.model-list {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line-70);
+  list-style: none;
+}
+
+.model-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-70);
+}
+
+.model-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.model-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.model-label {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.model-price {
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.model-controls .select-small {
+  width: auto;
+  min-height: 32px;
+  padding-left: 12px;
+  font-size: 13px;
+}
+
+.settings-save {
+  margin-top: 16px;
+}
+
+.settings-save .settings-result,
+.limits-form .settings-result {
+  margin: 0;
+}
+
+/* Limits: three small fields in a row, the checkbox and Save under them. */
+.limits-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.limits-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+
+.money-field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.money-field > span {
+  position: absolute;
+  left: 12px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.money-field input[type="number"] {
+  padding-left: 24px;
+}
+
+/* Usage: the table on a flush surface, the title and the note padded as a surface pads. */
+.usage-title {
+  padding: 20px 24px 12px;
+}
+
+.usage-scroll {
+  overflow-x: auto;
+}
+
+.usage-table th.usage-group {
+  padding-bottom: 0;
+  text-align: center;
+}
+
+.usage-table .usage-provider {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.usage-note {
+  margin: 0;
+  padding: 12px 24px 20px;
+}
+
+.settings-about {
+  max-width: 42rem;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+@media (max-width: 639px) {
+  .model-field,
+  .studio-settings .model-field {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .usage-table th,
+  .usage-table td {
+    padding: 10px 8px;
+  }
+
+  .usage-title {
+    padding: 16px 16px 8px;
+  }
+
+  .usage-note {
+    padding: 10px 16px 16px;
+  }
 }
 
 /* --------------------------------------------------------------------- motion */

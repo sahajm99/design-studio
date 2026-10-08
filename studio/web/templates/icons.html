@@ -1,7 +1,7 @@
 {#- Line icons, as the Hybridge design system draws them: a 20 unit box, stroke 1.6, round
-    caps and joins, in currentColor. Each means one thing everywhere: the five pages (18px
-    in the bar, 20px in the tab bar), the like and dislike marks (14 to 16px inline), and
-    the theme toggle's moon and sun (18px in the bar). -#}
+    caps and joins, in currentColor. Each means one thing everywhere: the six pages (18px
+    in the bar, 20px in the tab bar; Settings is a gear, v6), the like and dislike marks
+    (14 to 16px inline), and the theme toggle's moon and sun (18px in the bar). -#}
 {%- macro icon(name, size=18) -%}
 {%- set paths = {
   "studio": "M10 17.5 5.2 9.6 7.4 4.2h5.2l2.2 5.4L10 17.5Zm0 0v-5.9M7.6 2.5h4.8M10 9.2a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Z",
@@ -9,6 +9,7 @@
   "archive": "M3 5a1.5 1.5 0 0 1 1.5-1.5h11A1.5 1.5 0 0 1 17 5v1.5A1.5 1.5 0 0 1 15.5 8h-11A1.5 1.5 0 0 1 3 6.5V5ZM4.5 8v7A1.5 1.5 0 0 0 6 16.5h8a1.5 1.5 0 0 0 1.5-1.5V8M8.5 11h3",
   "editor": "M12.5 14.5H5A1.5 1.5 0 0 1 3.5 13V5A1.5 1.5 0 0 1 5 3.5h8A1.5 1.5 0 0 1 14.5 5v7.5M12.5 12.5h4v4h-4v-4Z",
   "runs": "M3 4.5h11M3 9h5M3 13.5h4M13.5 9.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM13.5 11.3v1.9l1.2.9",
+  "settings": "M8.08 4.42 8.52 2.39h2.96l.44 2.03a5.9 5.9 0 0 1 1.95 1.13l1.98-.63 1.48 2.56-1.54 1.39a5.9 5.9 0 0 1 0 2.26l1.54 1.39-1.48 2.56-1.98-.63a5.9 5.9 0 0 1-1.95 1.13l-.44 2.03H8.52l-.44-2.03a5.9 5.9 0 0 1-1.95-1.13l-1.98.63-1.48-2.56 1.54-1.39a5.9 5.9 0 0 1 0-2.26L2.67 7.48l1.48-2.56 1.98.63a5.9 5.9 0 0 1 1.95-1.13ZM10 7.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8Z",
   "check": "M4.5 10.5 8 14l7.5-8",
   "cross": "M5.5 5.5l9 9m0-9-9 9",
   "moon": "M17 10.62A7 7 0 1 1 9.38 3a5.44 5.44 0 0 0 7.62 7.62Z",

@@ -191,6 +191,11 @@ class PhotoRegistry:
         fields = _provider_fields(self._saved_keys, provider)
         return last_four(fields[-1]) if fields else ""
 
+    def saved_keys(self) -> ProviderKeys:
+        """The keys saved on the Settings page alone (none of `.env`), for the page to change one
+        provider's and save them all again. Never sent to a page."""
+        return self._saved_keys.model_copy()
+
     def set_saved_keys(self, keys: ProviderKeys) -> None:
         """Encrypt and save these as the saved keys (all of them, empty ones removed), and use
         them from the next photo. Raises SecretUnavailable without a secret."""
@@ -201,11 +206,27 @@ class PhotoRegistry:
         """The text with every key the studio knows removed, for a log line or a card."""
         return redact(text, [*self._env_keys().values(), *self._saved_keys.values()])
 
-    async def test_key(self, provider: ProviderId) -> KeyCheck:
-        """The provider's free key check with the key in use; in demo mode, no call at all."""
-        adapter = self._stand_in if self.stand_in else self._adapter(provider)
+    async def test_key(self, provider: ProviderId, typed: ProviderKeys | None = None) -> KeyCheck:
+        """The provider's free key check; in demo mode, no call at all. It checks the key in use,
+        or, when `typed` holds keys typed on the Settings page and not saved, those instead,
+        field by field (a field left empty keeps the key in use). Nothing is saved."""
+        if self.stand_in:
+            adapter: PhotoProvider = self._stand_in
+        else:
+            keys = self.keys()
+            if typed is not None:
+                keys = ProviderKeys(
+                    **{
+                        field: getattr(typed, field) or getattr(keys, field)
+                        for field in ProviderKeys.model_fields
+                    }
+                )
+            adapter = self._adapter(provider, keys)
         check = await adapter.test_key()
-        return check.model_copy(update={"message": self.redact(check.message)})
+        known = [*self._env_keys().values(), *self._saved_keys.values()]
+        if typed is not None:
+            known += typed.values()
+        return check.model_copy(update={"message": redact(check.message, known)})
 
     # ------------------------------------------------------------ which models
 
@@ -392,9 +413,9 @@ class PhotoRegistry:
             google_image_api_key=settings.google_image_api_key,
         )
 
-    def _adapter(self, provider: ProviderId) -> PhotoProvider:
-        """A real adapter for the provider, with the key in use now."""
-        keys = self.keys()
+    def _adapter(self, provider: ProviderId, keys: ProviderKeys | None = None) -> PhotoProvider:
+        """A real adapter for the provider, with the key in use now, or with `keys`."""
+        keys = keys if keys is not None else self.keys()
         if provider == "cloudflare":
             return CloudflarePhotoProvider(
                 account_id=keys.cloudflare_account_id,

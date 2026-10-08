@@ -131,19 +131,26 @@ async def run_draft(deps: Deps, run: Run, session: StudioSession) -> StudioSessi
 
 
 async def run_samples(
-    deps: Deps, run: Run, session: StudioSession, count: int | None = None
+    deps: Deps,
+    run: Run,
+    session: StudioSession,
+    count: int | None = None,
+    *,
+    compare: list[str] | None = None,
 ) -> list[Sample]:
     """Make a round of sample photos from the current prompt, have the critic score each one,
     and rank them against each other.
 
     `count`, when given, is the round's size in place of the session's sample count; either
-    way it is held to the most photos one round may ask for. Returns the round's samples,
-    failed ones included with their reason, or an empty list when the run failed. A stopped
-    run keeps the samples that finished as a partial round.
+    way it is held to the most photos one round may ask for. `compare` (v6), when given, names
+    the models of a compare round: one photo from each, from the same prompt version, ranked
+    together; the round's size is then the number of models, and the session keeps its own
+    model. Returns the round's samples, failed ones included with their reason, or an empty
+    list when the run failed. A stopped run keeps the samples that finished as a partial round.
     """
 
     async def work() -> list[Sample]:
-        workflow = _samples_workflow(deps, run, session, count)
+        workflow = _samples_workflow(deps, run, session, count, compare)
         state = await run_workflow(workflow, run.id, session.brief)
         return [Sample.model_validate(data) for data in state["samples"]]
 
@@ -450,7 +457,9 @@ def pick_source_photo(
 # --------------------------------------------------------------------- samples
 
 
-def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int | None) -> Workflow:
+def _samples_workflow(
+    deps: Deps, run: Run, session: StudioSession, count: int | None, compare: list[str] | None = None
+) -> Workflow:
     """load_prompt → generate_samples → review_samples → rank_samples → save_round."""
     store, kit = deps.store, deps.kit
     recorder = StepRecorder(store, run.id)
@@ -469,7 +478,7 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
     async def generate_samples(prompt_version: dict[str, Any]) -> Event:
         async with recorder.step("generate_samples") as info:
             version = PromptVersion.model_validate(prompt_version)
-            samples = await _make_samples(deps, session, version, count, info)
+            samples = await _make_samples(deps, session, version, count, info, compare)
             data = [sample.model_dump(mode="json") for sample in samples]
             return Event(output=data, state={"samples": data})
 
@@ -529,38 +538,55 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
 
 
 async def _make_samples(
-    deps: Deps, session: StudioSession, version: PromptVersion, count: int | None, info: StepInfo
+    deps: Deps,
+    session: StudioSession,
+    version: PromptVersion,
+    count: int | None,
+    info: StepInfo,
+    compare: list[str] | None = None,
 ) -> list[Sample]:
     """The round's photos from the session's model, each with a seed of its own.
 
     The registry turns the session's model id into the model and its adapter (v6); a model that
     can no longer be used gives way to the default, and the step's note says so. At most the
-    model's `max_parallel` photos are asked for at once, and before each paid photo the
-    registry checks the daily limits: a photo over a limit is not asked for, and its sample
-    carries the limit's message. A letterbox the model painted is trimmed off.
+    model's `max_parallel` photos are asked for at once on its provider, and before each paid
+    photo the registry checks the daily limits: a photo over a limit is not asked for, and its
+    sample carries the limit's message. A letterbox the model painted is trimmed off.
 
     The round holds `count` photos, or the session's sample count when `count` is None, and
-    never more than one round may ask for. The step's note counts the photos as they land, and
-    ends with the round's total cost. A sample that could not be made is kept with the reason.
-    When none could be made the step fails with the first reason, and no sample is kept. When
-    the run is stopped, the photos still on their way are abandoned and the samples that
-    finished are kept as a partial round.
+    never more than one round may ask for. A compare round (`compare`, the models' ids) holds
+    one photo from each model instead, all asked for at once. The step's note counts the photos
+    as they land, and ends with the round's total cost. A sample that could not be made is kept
+    with the reason. When none could be made the step fails with the first reason, and no
+    sample is kept. When the run is stopped, the photos still on their way are abandoned and
+    the samples that finished are kept as a partial round.
     """
     registry = deps.photos
-    resolved = registry.resolve(session.photo_model_id)
-    model = resolved.model
-    adapter = registry.adapter_for(model.id)
-    options = registry.options_for(model)
-    wanted = count if count is not None else session.sample_count
-    count = max(1, min(wanted, deps.settings.max_samples))
+    if compare:
+        chosen = [registry.resolve(model_id) for model_id in compare]
+        models = [resolved.model for resolved in chosen]
+    else:
+        chosen = [registry.resolve(session.photo_model_id)]
+        wanted = count if count is not None else session.sample_count
+        models = [chosen[0].model] * max(1, min(wanted, deps.settings.max_samples))
+    count = len(models)
+    # Each model's adapter and options, once; each provider's parallel limit, once.
+    plans = {
+        model.id: (registry.adapter_for(model.id), registry.options_for(model)) for model in models
+    }
+    gates: dict[str, asyncio.Semaphore] = {}
+    for model in models:
+        gates.setdefault(model.provider, asyncio.Semaphore(model.max_parallel))
     round_number = session.rounds + 1
     prompt = with_backdrop(version.photo_prompt, version.mode, deps.kit, version.layout)
     size = deps.kit.post_size
-    info.provider = registry.describe(model, options)
-    gate = asyncio.Semaphore(model.max_parallel)
+    info.provider = ", ".join(
+        dict.fromkeys(registry.describe(model, plans[model.id][1]) for model in models)
+    )
     trimmed: list[int] = []
 
-    async def make(index: int) -> Sample:
+    async def make(index: int, model: ImageModel) -> Sample:
+        adapter, options = plans[model.id]
         sample = Sample(
             session_id=session.id,
             prompt_version_id=version.id,
@@ -570,7 +596,7 @@ async def _make_samples(
             model_id=model.id,
         )
         out_path = deps.store.samples_dir / session.id / f"{round_number}-{index}.png"
-        async with gate:
+        async with gates[model.provider]:
             photo = await _ask_for_photo(
                 deps, adapter, model, options, sample, prompt, (size.width, size.height), out_path
             )
@@ -578,7 +604,9 @@ async def _make_samples(
             trimmed.append(index)
         return sample
 
-    tasks = [asyncio.create_task(make(index)) for index in range(1, count + 1)]
+    tasks = [
+        asyncio.create_task(make(index, model)) for index, model in enumerate(models, start=1)
+    ]
     landed: list[Sample] = []
     try:
         for next_sample in asyncio.as_completed(tasks):
@@ -598,7 +626,7 @@ async def _make_samples(
         if made
         else NONE_MADE.format(count=count)
     )
-    lines = [resolved.note] if resolved.note else []
+    lines = list(dict.fromkeys(resolved.note for resolved in chosen if resolved.note))
     if trimmed:
         lines.append(LETTERBOX_TRIMMED.format(photos=plural(len(trimmed), "photo")))
     info.note = " ".join([*lines, total])

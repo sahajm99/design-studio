@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% set active_page = "settings" %}
+{% set page_name = "Settings" %}
+{% block title %}Settings · Design Studio{% endblock %}
+{% block content %}
+<header class="page-header">
+  <h1 class="page-title">Settings<span class="page-title-tail">Image models and your keys</span></h1>
+</header>
+
+{#- The models form has no fields of its own: each card's model fields join it through their
+    form attribute, beside the card's own key form, and "Save models" sends them all. #}
+<form id="models-form" method="post" action="/settings/models" hidden></form>
+
+<section class="panel settings-panel" id="models" aria-labelledby="models-title">
+  <h2 id="models-title">Image models</h2>
+  {% if keys_unreadable %}<p class="field-error settings-alert" role="alert">{{ keys_unreadable }}</p>{% endif %}
+  {% if keys_error %}<p class="field-error settings-alert" role="alert">{{ keys_error }}</p>{% endif %}
+  <div class="provider-list">
+    {% for card in provider_cards %}
+    {% set card_index = loop.index %}
+    <article class="provider-card" id="{{ card.id }}" aria-labelledby="{{ card.id }}-title">
+      <div class="provider-head">
+        <h3 class="section-title" id="{{ card.id }}-title">{{ card.label }}</h3>
+        <span class="badge provider-status is-{{ card.tone }}">{{ card.status }}</span>
+      </div>
+      <p class="meta provider-key-line">{{ card.key_line }}</p>
+
+      {#- A saved key is never sent back: the fields start empty, and a field left empty keeps
+          the saved key. Test key checks the key typed here, and saves it when it works; with
+          the fields empty, it checks the key in use. #}
+      <form method="post" action="/settings/keys/{{ card.id }}" class="provider-key-form" autocomplete="off">
+        <div class="field-grid">
+          {% for field in card.fields %}
+          <div class="field">
+            <label for="{{ card.id }}-{{ field.name }}">{{ field.label }}</label>
+            <input type="password" id="{{ card.id }}-{{ field.name }}" name="{{ field.name }}" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="{{ 'Replace the saved key' if card.has_saved else 'Paste it here' }}" />
+          </div>
+          {% endfor %}
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn btn-small">Save</button>
+          <button type="submit" formaction="/settings/keys/{{ card.id }}/test" class="btn btn-small">Test key</button>
+          <button type="submit" formaction="/settings/keys/{{ card.id }}/remove" class="btn btn-small btn-danger-soft" {{ "" if card.has_saved else "disabled" }}>Remove</button>
+        </div>
+      </form>
+      {% if card.result %}<p class="settings-result" role="status">{{ card.result }}</p>{% endif %}
+      {% if card.check %}<p class="provider-check{{ '' if card.check.ok else ' is-failed' }}" role="status">{{ card.check.message }}</p>{% endif %}
+      {% if card.note %}<p class="hint provider-note">{{ card.note }}</p>{% endif %}
+
+      <ul class="model-list">
+        {% for model in card.models %}
+        {% set row_id = "model-" ~ card_index ~ "-" ~ loop.index %}
+        <li class="model-row" role="group" aria-labelledby="{{ row_id }}">
+          <div class="model-name">
+            <span class="model-label" id="{{ row_id }}">{{ model.label }}</span>
+            <span class="model-price">{{ model.price }}</span>
+          </div>
+          <div class="model-controls">
+            <label class="check-option">
+              <input type="checkbox" name="offered" value="{{ model.id }}" form="models-form" {{ "checked" if model.offered else "" }} />
+              <span>Offer this model</span>
+            </label>
+            {% for choice in model.choices %}
+            <label class="sr-only" for="{{ row_id }}-{{ loop.index }}">{{ choice.label }}</label>
+            <select id="{{ row_id }}-{{ loop.index }}" name="{{ choice.field }}" form="models-form" class="select-small">
+              {% for value in choice.allowed %}
+              <option value="{{ value }}" {{ "selected" if value == choice.current else "" }}>{{ choice.label }}: {{ value }}</option>
+              {% endfor %}
+            </select>
+            {% endfor %}
+            <label class="check-option">
+              <input type="radio" name="default_model_id" value="{{ model.id }}" form="models-form" {{ "checked" if model.is_default else "" }} {{ "" if model.can_default else "disabled" }} />
+              <span>Default</span>
+            </label>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </article>
+    {% endfor %}
+  </div>
+  <div class="actions settings-save">
+    <button type="submit" form="models-form" class="btn">Save models</button>
+    {% if models_saved %}<p class="settings-result" role="status">{{ models_saved }}</p>{% endif %}
+  </div>
+</section>
+
+<section class="panel" id="limits" aria-labelledby="limits-title">
+  <h2 id="limits-title">Limits</h2>
+  <form method="post" action="/settings/limits" class="limits-form">
+    <div class="limits-row">
+      <div class="field-small">
+        <label for="limit-openai">Photos a day for OpenAI</label>
+        <input type="number" id="limit-openai" name="daily_photo_limit_openai" min="0" max="10000" step="1" value="{{ limits.openai }}" />
+      </div>
+      <div class="field-small">
+        <label for="limit-google">Photos a day for Google</label>
+        <input type="number" id="limit-google" name="daily_photo_limit_google" min="0" max="10000" step="1" value="{{ limits.google }}" />
+      </div>
+      <div class="field-small">
+        <label for="limit-spend">Most to spend a day</label>
+        <span class="money-field">
+          <span aria-hidden="true">$</span>
+          <input type="number" id="limit-spend" name="daily_spend_limit_usd" min="0" max="10000" step="0.01" value="{{ limits.spend }}" />
+        </span>
+      </div>
+    </div>
+    <label class="check-option">
+      <input type="checkbox" name="auto_fallback_to_default" value="on" {{ "checked" if limits.fallback else "" }} />
+      <span>In auto mode, finish on the default model when a paid model stops</span>
+    </label>
+    <div class="actions">
+      <button type="submit" class="btn">Save limits</button>
+      {% if limits_saved %}<p class="settings-result" role="status">{{ limits_saved }}</p>{% endif %}
+    </div>
+  </form>
+</section>
+
+<section class="panel is-flush usage-panel" id="usage" aria-labelledby="usage-title">
+  <h2 class="section-title usage-title" id="usage-title">Usage</h2>
+  <div class="usage-scroll">
+    <table class="data-table usage-table">
+      <thead>
+        <tr>
+          <th scope="col" rowspan="2">Provider</th>
+          <th scope="colgroup" colspan="2" class="usage-group">Today</th>
+          <th scope="colgroup" colspan="2" class="usage-group">This month</th>
+        </tr>
+        <tr>
+          <th scope="col" class="num">Photos</th>
+          <th scope="col" class="num">Spent</th>
+          <th scope="col" class="num">Photos</th>
+          <th scope="col" class="num">Spent</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in usage_rows %}
+        <tr>
+          <th scope="row" class="usage-provider">{{ row.label }}</th>
+          <td class="num">{{ row.photos_today }}</td>
+          <td class="num">{{ row.spent_today }}</td>
+          <td class="num">{{ row.photos_month }}</td>
+          <td class="num">{{ row.spent_month }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint usage-note">{{ usage_note }}</p>
+</section>
+
+<section class="panel" id="about-keys" aria-labelledby="about-keys-title">
+  <h2 id="about-keys-title">About your keys</h2>
+  <p class="settings-about">{{ about_keys }}</p>
+</section>
+{% endblock %}

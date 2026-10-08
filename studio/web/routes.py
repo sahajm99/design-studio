@@ -39,6 +39,7 @@ from studio.contracts import (
     LayoutTemplate,
     LogoPosition,
     Mode,
+    PhotoSettings,
     PhotoSide,
     Post,
     PromptVersion,
@@ -74,6 +75,9 @@ from studio.library.sources import (
 )
 from studio.library.taste import build_taste_profile
 from studio.media import agent_copy_path, agent_picture
+from studio.photos.base import KEY_REFUSED, PROVIDER_LABELS
+from studio.photos.catalogue import ImageModel
+from studio.photos.registry import MODEL_GONE, NO_PHOTO_MODEL, PhotoRegistry
 from studio.render import (
     NEEDS_PHOTO,
     allowed_templates,
@@ -89,6 +93,7 @@ from studio.render import (
 )
 from studio.render.custom import upload_file, uploads_only
 from studio.render.faces import Face
+from studio.secrets import KEYS_UNREADABLE, NO_SECRET, ProviderKeys, SecretUnavailable
 from studio.store import Store
 from studio.web.jobs import RunJobs
 from studio.web.uploads import (
@@ -129,6 +134,64 @@ _PROMPT_EXCERPT_CHARS = 90
 _NOT_FOUND = "Not found."
 # v6: today's spend on the Studio page, "Spent today: $0.14".
 SPENT = "${spent:.2f}"
+
+# v6: the Settings page. The providers whose keys it keeps, in its order, each with its key
+# fields: the ProviderKeys field and the field's label.
+_KEY_PROVIDERS: dict[str, tuple[tuple[str, str], ...]] = {
+    "cloudflare": (("cloudflare_account_id", "Account id"), ("cloudflare_api_token", "API token")),
+    "openai": (("openai_api_key", "API key"),),
+    "google": (("google_image_api_key", "API key"),),
+}
+# A provider card's status pill, and the tone it is drawn in (colour only for an outcome).
+_STATUS_FREE = "Free"
+_STATUS_READY = "Ready"
+_STATUS_NOT_SET_UP = "Not set up"
+_STATUS_REFUSED = "Key refused"
+# Where the key in use comes from; a saved key shows only its last four characters.
+KEY_SAVED_HERE = "Saved here · ends {ending}"
+_KEY_SAVED_HERE_SHORT = "Saved here"
+_KEY_FROM_ENV = "From .env"
+_KEY_NOT_SET = "Not set"
+_GOOGLE_BILLING_NOTE = (
+    "Google's image models need billing on the Google project behind this key. "
+    "Use a project of its own, so the studio's free text key stays free."
+)
+SETTINGS_DEMO_BANNER = "Demo mode: no image model is called, and keys are not used."
+_USAGE_NOTE = (
+    "Estimates from list prices and the usage each provider reports. "
+    "Your provider's billing page is the record."
+)
+_ABOUT_KEYS = (
+    "Saved keys are encrypted on this machine and never shown again. "
+    "Only the last four characters are kept in view. The studio answers only on this computer."
+)
+_SETTINGS_SAVED = "Saved."
+_SETTINGS_REMOVED = "Removed."
+# Follows a failed check of a key typed and not saved yet: "Test key" saves a typed key only
+# when the check finds it works.
+_TYPED_KEY_NOT_SAVED = "Nothing was saved."
+_OPTION_LABELS: dict[str, str] = {"quality": "Quality", "image_size": "Image size", "size": "Size"}
+# The most a daily photo limit and the daily spend limit may be set to.
+_MAX_PHOTO_LIMIT = 10_000
+_MAX_SPEND_LIMIT = 10_000.0
+# The estimates (v6), from the catalogue: on Generate, on Compare and under the auto limits.
+GENERATE_FREE = "Generate {count}"
+GENERATE_PAID = "Generate {count} · about ${total:.2f}"
+GENERATE_NOT_CHECKED = "Generate {count} · price not checked"
+COMPARE_IDLE = "Compare models"
+COMPARE_FREE = "Compare {count} models"
+COMPARE_PAID = "Compare {count} models · about ${total:.2f}"
+COMPARE_NOT_CHECKED = "Compare {count} models · price not checked"
+AUTO_PAID = "At most {photos}: up to ${total:.2f} on {label}."
+AUTO_FREE = "At most {photos}: free on {label}."
+AUTO_NOT_CHECKED = "At most {photos} on {label}; its price was not checked."
+COMPARE_HOW_MANY = "Choose two or three models to compare."
+# A compare round's header on the session page.
+COMPARED = "Compared {models} · {cost}"
+_MAX_COMPARE = 3
+_MIN_COMPARE = 2
+# The auto settings' Photos field starts at this many, as studio.html writes it.
+_AUTO_PHOTOS_START = 6
 
 STEP_LABELS: dict[str, str] = {
     "load_context": "Gather context",
@@ -424,6 +487,283 @@ def _photo_model_choice(deps: Deps, raw: str | None) -> str | None:
     return chosen
 
 
+# ------------------------------------------------------- image models (v6)
+
+
+def _model_label(registry: PhotoRegistry, model_id: str) -> str:
+    """The catalogue's label for a model id, or the id itself for a model it no longer has."""
+    model = registry.model(model_id)
+    return model.label if model is not None else model_id
+
+
+def _model_choices(registry: PhotoRegistry) -> list[dict[str, str]]:
+    """What a model picker offers: the usable models, each with its price beside its name."""
+    return [
+        {"id": model.id, "label": registry.price_label(model)} for model in registry.usable_models()
+    ]
+
+
+def _session_model(registry: PhotoRegistry, session: StudioSession) -> ImageModel | None:
+    """The model the session's next round uses, as its picker shows it: the session's own while
+    it can be used, else the studio's default; None when no model can be used."""
+    own = next((m for m in registry.usable_models() if m.id == session.photo_model_id), None)
+    return own or registry.default_model()
+
+
+def _photos_cost(registry: PhotoRegistry, models: list[ImageModel]) -> float | None:
+    """What one photo from each of `models` is expected to cost, from the catalogue: nothing for
+    a free model; None when a paid model's price was not checked."""
+    total = 0.0
+    for model in models:
+        if not model.paid:
+            continue
+        price = registry.estimate(model)
+        if price is None or not model.checked:
+            return None
+        total += price
+    return total
+
+
+def _generate_label(registry: PhotoRegistry, model: ImageModel | None, count: int) -> str:
+    """The Generate button's words: "Generate 3 · about $0.15", or "Generate 3" on a free model."""
+    if model is None or not model.paid:
+        return GENERATE_FREE.format(count=count)
+    total = _photos_cost(registry, [model] * count)
+    if total is None:
+        return GENERATE_NOT_CHECKED.format(count=count)
+    return GENERATE_PAID.format(count=count, total=total)
+
+
+def _compare_label(registry: PhotoRegistry, models: list[ImageModel]) -> str:
+    """The compare button's words for the ticked models, "Compare 3 models · about $0.10";
+    "Compare models" until two are ticked."""
+    count = len(models)
+    if count < _MIN_COMPARE:
+        return COMPARE_IDLE
+    total = _photos_cost(registry, models)
+    if total is None:
+        return COMPARE_NOT_CHECKED.format(count=count)
+    if total == 0:
+        return COMPARE_FREE.format(count=count)
+    return COMPARE_PAID.format(count=count, total=total)
+
+
+def _auto_line(registry: PhotoRegistry, model: ImageModel | None, photos: int) -> str:
+    """The line under the auto limits: the most an auto session can cost on its model, "At most
+    6 photos: up to $0.30 on GPT Image 2.5 Flare."; "" when no model can be used."""
+    if model is None:
+        return ""
+    photos_text = plural(photos, "photo")
+    if not model.paid:
+        return AUTO_FREE.format(photos=photos_text, label=model.label)
+    total = _photos_cost(registry, [model] * photos)
+    if total is None:
+        return AUTO_NOT_CHECKED.format(photos=photos_text, label=model.label)
+    return AUTO_PAID.format(photos=photos_text, total=total, label=model.label)
+
+
+def _fix_in_settings(text: str | None) -> bool:
+    """Whether the fix for a failure is on the Settings page: a refused or missing key, a model
+    the key cannot use or a daily limit (their messages send the designer "in Settings"), or no
+    usable model at all."""
+    return bool(text) and (" in Settings" in str(text) or text == NO_PHOTO_MODEL)
+
+
+def _round_lines(
+    registry: PhotoRegistry, session: StudioSession, rounds: list[dict[str, Any]]
+) -> dict[int, str]:
+    """A line under a round's title, by round number: a compare round's models and cost; on the
+    newest round, that the session's model was no longer available and the default made the
+    round's photos (spec v6, section 11)."""
+    lines: dict[int, str] = {}
+    usable = {model.id for model in registry.usable_models()}
+    for position, group in enumerate(rounds):
+        samples: list[Sample] = group["samples"]
+        model_ids = list(dict.fromkeys(sample.model_id for sample in samples if sample.model_id))
+        if len(model_ids) > 1:
+            labels = ", ".join(_model_label(registry, model_id) for model_id in model_ids)
+            lines[group["round"]] = COMPARED.format(models=labels, cost=registry.round_cost(samples))
+        elif (
+            position == 0
+            and model_ids
+            and session.photo_model_id
+            and session.photo_model_id not in usable
+            and model_ids[0] != session.photo_model_id
+        ):
+            lines[group["round"]] = MODEL_GONE.format(
+                label=_model_label(registry, session.photo_model_id),
+                default=_model_label(registry, model_ids[0]),
+            )
+    return lines
+
+
+def _key_checks(request: Request) -> dict[str, dict[str, Any]]:
+    """The Settings page's last key check for each provider: its words, whether it worked, and
+    whether the provider refused the key in use. Kept in memory until that provider's key is
+    saved or removed, or the studio restarts; never a key."""
+    checks = getattr(request.app.state, "key_checks", None)
+    if checks is None:
+        checks = {}
+        request.app.state.key_checks = checks
+    return checks
+
+
+def _key_line(registry: PhotoRegistry, provider: str) -> str:
+    """Where the provider's key in use comes from: "Saved here · ends 7f3a", "From .env" or
+    "Not set". A saved key shows its last four characters, and nothing more, ever."""
+    source = registry.key_source(provider)  # type: ignore[arg-type]
+    if source == "saved":
+        ending = registry.key_ending(provider)  # type: ignore[arg-type]
+        return KEY_SAVED_HERE.format(ending=ending) if ending else _KEY_SAVED_HERE_SHORT
+    if source == "env":
+        return _KEY_FROM_ENV
+    return _KEY_NOT_SET
+
+
+def _provider_status(
+    registry: PhotoRegistry, provider: str, check: dict[str, Any] | None
+) -> tuple[str, str]:
+    """A provider card's status pill and its tone: "Not set up" without every key it needs, "Key
+    refused" after a check the provider refused, else "Free" (Cloudflare) or "Ready"."""
+    if not registry.has_key(provider):  # type: ignore[arg-type]
+        return _STATUS_NOT_SET_UP, "neutral"
+    if check is not None and check.get("refused"):
+        return _STATUS_REFUSED, "danger"
+    if provider == "cloudflare":
+        return _STATUS_FREE, "success"
+    return _STATUS_READY, "success"
+
+
+def _model_rows(
+    registry: PhotoRegistry, provider: str, photo_settings: PhotoSettings, default_id: str
+) -> list[dict[str, Any]]:
+    """A provider card's models: each offered or not, its price, its preset's choices and
+    whether it is the default. Only a model that can make photos now may be the default."""
+    enabled = set(photo_settings.enabled_model_ids)
+    has_key = registry.has_key(provider)  # type: ignore[arg-type]
+    rows = []
+    for model in registry.catalogue:
+        if model.provider != provider:
+            continue
+        options = registry.options_for(model)
+        rows.append(
+            {
+                "id": model.id,
+                "label": model.label,
+                "price": registry.price_label(model).removeprefix(f"{model.label} · "),
+                "offered": not enabled or model.id in enabled,
+                "is_default": model.id == default_id,
+                "can_default": has_key or (registry.stand_in and not model.paid),
+                "choices": [
+                    {
+                        "field": f"option:{model.id}:{name}",
+                        "label": _OPTION_LABELS.get(name, name.replace("_", " ").capitalize()),
+                        "allowed": allowed,
+                        "current": options.get(name, ""),
+                    }
+                    for name, allowed in model.option_choices.items()
+                ],
+            }
+        )
+    return rows
+
+
+def _usage_rows(deps: Deps) -> list[dict[str, Any]]:
+    """The Usage part: photos and estimated spend for each provider, today and this calendar
+    month (UTC days). The stand-in has a row in demo mode, or once it made a photo this month."""
+    store = deps.store
+    today = _midnight_utc()
+    month = today.replace(day=1)
+    providers = list(_KEY_PROVIDERS)
+    if deps.photos.stand_in or store.count_photos_since(month, "fake"):
+        providers.append("fake")
+    return [
+        {
+            "label": PROVIDER_LABELS[provider],
+            "photos_today": store.count_photos_since(today, provider),
+            "spent_today": SPENT.format(spent=store.spend_since(today, provider)),
+            "photos_month": store.count_photos_since(month, provider),
+            "spent_month": SPENT.format(spent=store.spend_since(month, provider)),
+        }
+        for provider in providers
+    ]
+
+
+def _settings_context(
+    deps: Deps,
+    checks: dict[str, dict[str, Any]],
+    *,
+    saved: str = "",
+    removed: str = "",
+    error: str = "",
+) -> dict[str, Any]:
+    """The Settings page: a card per provider, the limits, the usage and the note on keys.
+    `saved`, `removed` and `error` come from the address a form's answer sent the browser to."""
+    registry = deps.photos
+    photo_settings = registry.photo_settings()
+    default = registry.default_model()
+    default_id = default.id if default is not None else photo_settings.default_model_id
+    cards = []
+    for provider, fields in _KEY_PROVIDERS.items():
+        check = checks.get(provider)
+        status, tone = _provider_status(registry, provider, check)
+        result = ""
+        if saved == provider:
+            result = _SETTINGS_SAVED
+        elif removed == provider:
+            result = _SETTINGS_REMOVED
+        cards.append(
+            {
+                "id": provider,
+                "label": PROVIDER_LABELS[provider],
+                "status": status,
+                "tone": tone,
+                "key_line": _key_line(registry, provider),
+                "has_saved": registry.key_source(provider) == "saved",  # type: ignore[arg-type]
+                "fields": [{"name": name, "label": label} for name, label in fields],
+                "check": check,
+                "result": result,
+                "note": _GOOGLE_BILLING_NOTE if provider == "google" else "",
+                "models": _model_rows(registry, provider, photo_settings, default_id),
+            }
+        )
+    limits = photo_settings.daily_photo_limit
+    return {
+        "demo_banner": SETTINGS_DEMO_BANNER,
+        "provider_cards": cards,
+        "keys_unreadable": KEYS_UNREADABLE if registry.keys_unreadable else "",
+        "keys_error": NO_SECRET if error == "no_secret" else "",
+        "models_saved": _SETTINGS_SAVED if saved == "models" else "",
+        "limits": {
+            "openai": limits.get("openai", ""),
+            "google": limits.get("google", ""),
+            "spend": f"{photo_settings.daily_spend_limit_usd:.2f}",
+            "fallback": photo_settings.auto_fallback_to_default,
+        },
+        "limits_saved": _SETTINGS_SAVED if saved == "limits" else "",
+        "usage_rows": _usage_rows(deps),
+        "usage_note": _USAGE_NOTE,
+        "about_keys": _ABOUT_KEYS,
+    }
+
+
+def _whole_number(raw: str) -> int | None:
+    """A typed whole number, or None when the field holds none."""
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return None
+
+
+def _dollars(raw: str) -> float | None:
+    """A typed amount of dollars ("2", "2.50", "$2.50"), or None when the field holds none."""
+    try:
+        value = float(raw.strip().lstrip("$").strip())
+    except ValueError:
+        return None
+    return value if value == value else None  # NaN is not an amount
+
+
 def _auto_settings(max_rounds: int, photo_budget: int, stop_score: float) -> AutoSettings:
     """An auto session's limits from the Studio form, each clamped to the range it allows."""
     return AutoSettings(
@@ -594,12 +934,18 @@ def _child_rows(store: Store, run_id: str) -> list[dict[str, Any]]:
 
 
 def _studio_context(deps: Deps, *, error: str | None = None, brief_value: str = "") -> dict[str, Any]:
+    registry = deps.photos
+    default = registry.default_model()
     return {
         "posts": deps.store.list_posts(),
         "sessions": deps.store.list_sessions(),
         "photos_today": deps.store.count_photos_since(_midnight_utc()),
         # v6: what today's photos cost, across every provider.
         "spent_today": SPENT.format(spent=deps.store.spend_since(_midnight_utc())),
+        # v6: auto mode's "Photo model", the default chosen, and the most the session can cost.
+        "photo_models": _model_choices(registry),
+        "default_photo_model_id": default.id if default is not None else "",
+        "auto_line": _auto_line(registry, default, _AUTO_PHOTOS_START),
         # v4: "Research first" and the month's searches, unless the kit turns research off.
         "research_enabled": deps.kit.research.enabled,
         "searches_this_month": deps.store.search_credits_this_month(),
@@ -1208,8 +1554,27 @@ def _session_context(
     scout_running = is_running and active_run is not None and active_run.kind == "scout"
     auto_state = session.auto_state
     rounds = _round_groups(store, session.id)
+    registry = deps.photos
+    session_model = _session_model(registry, session)
+    failed_run = _failed_run_context(store, session, rounds)
     return {
         "session": session,
+        # v6: the Model picker (the session's model chosen), the Generate button's estimate,
+        # the compare round's choices, and a line under a round where one is due.
+        "photo_models": _model_choices(registry),
+        "photo_model_selected": session_model.id if session_model is not None else "",
+        "generate_label": _generate_label(registry, session_model, session.sample_count),
+        "compare_label": COMPARE_IDLE,
+        "round_lines": _round_lines(registry, session, rounds),
+        # Failed samples, and a failed run, whose fix is on the Settings page link to it.
+        "settings_link_ids": {
+            sample.id
+            for round_group in rounds
+            for sample in round_group["samples"]
+            if _fix_in_settings(sample.error)
+        },
+        "failed_needs_settings": failed_run is not None
+        and _fix_in_settings(failed_run["run"].error),
         "current_version": current,
         "current_version_label": _version_label(current) if current else "",
         "hashtags_text": " ".join(current.hashtags) if current else "",
@@ -1235,7 +1600,7 @@ def _session_context(
         # "" when the final check was skipped.
         "picked_layout": auto_state.picked_layout if auto_state else "",
         "quality_bar_url": _quality_bar_view(deps)["url"],
-        "failed_run": _failed_run_context(store, session, rounds),
+        "failed_run": failed_run,
         "photos_today": store.count_photos_since(_midnight_utc()),
         "previous_version": previous,
         "diff_html": _word_diff_html(previous.photo_prompt, current.photo_prompt)
@@ -1263,8 +1628,25 @@ def _list_archive_for_filter(store: Store, filter_value: str) -> tuple[str, list
 
 
 def _archive_context(
-    store: Store, samples: list[Sample], active_filter: str, *, message: str | None = None
+    store: Store,
+    samples: list[Sample],
+    active_filter: str,
+    *,
+    message: str | None = None,
+    photos: PhotoRegistry | None = None,
+    model: str = "",
 ) -> dict[str, Any]:
+    """The archive's cards for the filter. v6: `model`, a catalogue id, keeps only that model's
+    photos; the Model filter offers each model that made a photo here, and each card carries
+    the model's badge (`photos`, the registry, names the models and their costs)."""
+    made_by = list(
+        dict.fromkeys(
+            sample.model_id for sample in store.list_archive() if sample.model_id and sample.image_path
+        )
+    )
+    active_model = model if model in made_by else ""
+    if active_model:
+        samples = [sample for sample in samples if sample.model_id == active_model]
     version_cache: dict[str, PromptVersion | None] = {}
     rows = []
     for sample in samples:
@@ -1278,14 +1660,39 @@ def _archive_context(
                 "prompt_excerpt": prompt_text[:_PROMPT_EXCERPT_CHARS],
                 "prompt_full": prompt_text,
                 "prompt_is_long": len(prompt_text) > _PROMPT_EXCERPT_CHARS,
+                "badge": photos.badge(sample) if photos is not None else "",
             }
         )
+    # The models in the catalogue's order, then any the catalogue no longer has.
+    catalogue_order = {m.id: n for n, m in enumerate(photos.catalogue)} if photos else {}
+    made_by.sort(key=lambda model_id: catalogue_order.get(model_id, len(catalogue_order)))
+
+    def address(filter_name: str, model_id: str) -> str:
+        query = {"filter": filter_name, **({"model": model_id} if model_id else {})}
+        return f"/archive?{urlencode(query)}"
+
     return {
         "rows": rows,
         "active_filter": active_filter,
         "filters": [
-            {"name": name, "label": _ARCHIVE_FILTER_LABELS.get(name, name.capitalize())}
+            {
+                "name": name,
+                "label": _ARCHIVE_FILTER_LABELS.get(name, name.capitalize()),
+                "href": address(name, active_model),
+            }
             for name in _ARCHIVE_FILTERS
+        ],
+        "active_model": active_model,
+        "model_filters": [
+            {"id": "", "label": "All", "href": address(active_filter, "")},
+            *(
+                {
+                    "id": model_id,
+                    "label": _model_label(photos, model_id) if photos else model_id,
+                    "href": address(active_filter, model_id),
+                }
+                for model_id in made_by
+            ),
         ],
         "disliked_total": len(store.list_archive(reaction="disliked")),
         "message": message,
@@ -1982,15 +2389,35 @@ async def generate_samples_route(
     layout: Annotated[LayoutId, Form()] = "hero",
     sample_count: Annotated[int, Form()] = 3,
     photo_model_id: Annotated[str | None, Form()] = None,
+    compare: Annotated[str | None, Form()] = None,
+    compare_model_ids: Annotated[list[str] | None, Form()] = None,
 ) -> Response:
+    """Make a round from the prompt as the form has it, saving the designer's edits as a new
+    version first. v6: `photo_model_id` is the round's model, saved on the session for "Generate
+    again". The compare button sends `compare` with `compare_model_ids`: then the round makes
+    one photo with each of those two or three usable models, and the session keeps its model."""
     deps: Deps = request.app.state.deps
     session = _require_session(deps.store, session_id)
     if _session_busy(deps.store, session):
         return RedirectResponse(url=f"/sessions/{session.id}", status_code=303)
-    # v6: the model this round, and "Generate again", use; saved on the session.
-    chosen_model = _photo_model_choice(deps, photo_model_id)
-    if chosen_model is not None:
-        session.photo_model_id = chosen_model
+    compared: list[str] | None = None
+    if compare:
+        usable = {model.id for model in deps.photos.usable_models()}
+        compared = [
+            model_id for model_id in dict.fromkeys(compare_model_ids or []) if model_id in usable
+        ]
+        if not _MIN_COMPARE <= len(compared) <= _MAX_COMPARE:
+            return _page(
+                request,
+                "session.html",
+                _session_context(deps, session, error=COMPARE_HOW_MANY),
+                status_code=400,
+            )
+    else:
+        # v6: the model this round, and "Generate again", use; saved on the session.
+        chosen_model = _photo_model_choice(deps, photo_model_id)
+        if chosen_model is not None:
+            session.photo_model_id = chosen_model
     current = (
         deps.store.get_prompt_version(session.current_prompt_version_id)
         if session.current_prompt_version_id
@@ -2044,7 +2471,7 @@ async def generate_samples_route(
     deps.store.save_session(session)
 
     jobs: RunJobs = request.app.state.jobs
-    jobs.start(run.id, run_samples(deps, run, session))
+    jobs.start(run.id, run_samples(deps, run, session, compare=compared))
     return RedirectResponse(url=f"/sessions/{session.id}", status_code=303)
 
 
@@ -2433,13 +2860,17 @@ async def set_sample_reaction(request: Request, sample_id: str, body: ReactionBo
 
 
 @router.get("/archive")
-async def archive_page(request: Request, filter: str = "all", bar: str = "") -> Response:
+async def archive_page(
+    request: Request, filter: str = "all", bar: str = "", model: str = ""
+) -> Response:
     store: Store = request.app.state.store
+    photos: PhotoRegistry = request.app.state.deps.photos
     active_filter, samples = _list_archive_for_filter(store, filter)
     message = _QUALITY_BAR_IS_SET if bar == "set" else None
-    return _page(
-        request, "archive.html", _archive_context(store, samples, active_filter, message=message)
+    context = _archive_context(
+        store, samples, active_filter, message=message, photos=photos, model=model
     )
+    return _page(request, "archive.html", context)
 
 
 @router.post("/archive/delete")
@@ -2447,8 +2878,10 @@ async def delete_selected_samples(
     request: Request,
     ids: Annotated[list[str], Form(default_factory=list)],
     filter: Annotated[str, Form()] = "all",
+    model: Annotated[str, Form()] = "",
 ) -> Response:
     store: Store = request.app.state.store
+    photos: PhotoRegistry = request.app.state.deps.photos
     deleted = skipped = 0
     for sample_id in ids:
         try:
@@ -2462,12 +2895,20 @@ async def delete_selected_samples(
 
     active_filter, samples = _list_archive_for_filter(store, filter)
     message = _delete_result_message(deleted, skipped)
-    return _page(request, "archive.html", _archive_context(store, samples, active_filter, message=message))
+    context = _archive_context(
+        store, samples, active_filter, message=message, photos=photos, model=model
+    )
+    return _page(request, "archive.html", context)
 
 
 @router.post("/archive/delete-disliked")
-async def delete_disliked_samples(request: Request, filter: Annotated[str, Form()] = "all") -> Response:
+async def delete_disliked_samples(
+    request: Request,
+    filter: Annotated[str, Form()] = "all",
+    model: Annotated[str, Form()] = "",
+) -> Response:
     store: Store = request.app.state.store
+    photos: PhotoRegistry = request.app.state.deps.photos
     deleted = skipped = 0
     for sample in store.list_archive(reaction="disliked"):
         if store.delete_sample(sample.id):
@@ -2477,7 +2918,10 @@ async def delete_disliked_samples(request: Request, filter: Annotated[str, Form(
 
     active_filter, samples = _list_archive_for_filter(store, filter)
     message = _delete_result_message(deleted, skipped)
-    return _page(request, "archive.html", _archive_context(store, samples, active_filter, message=message))
+    context = _archive_context(
+        store, samples, active_filter, message=message, photos=photos, model=model
+    )
+    return _page(request, "archive.html", context)
 
 
 @router.post("/archive/{sample_id}/start")
@@ -2653,6 +3097,214 @@ async def run_status(request: Request, run_id: str) -> JSONResponse:
             "events": [event.model_dump(mode="json") for event in events],
             "children": _child_rows(store, run.id),
             "parent_run_id": run.parent_run_id,
+        }
+    )
+
+
+# ------------------------------------------------------------ settings (v6)
+
+
+def _key_provider(provider: str) -> str:
+    """The provider a key route names; 404 for one the Settings page does not keep keys for."""
+    if provider not in _KEY_PROVIDERS:
+        raise _not_found()
+    return provider
+
+
+async def _typed_keys(request: Request, provider: str) -> ProviderKeys:
+    """The provider's key fields as typed on the Settings page, each trimmed; every other
+    provider's fields empty. Only ever in memory."""
+    form = await request.form()
+    typed: dict[str, str] = {}
+    for field, _ in _KEY_PROVIDERS[provider]:
+        raw = form.get(field)
+        typed[field] = raw.strip() if isinstance(raw, str) else ""
+    return ProviderKeys(**typed)
+
+
+def _save_typed_keys(registry: PhotoRegistry, provider: str, typed: ProviderKeys) -> None:
+    """Save the provider's typed fields over its saved ones, encrypted; a field left empty
+    keeps the saved key as it is. Raises SecretUnavailable without a secret."""
+    saved = registry.saved_keys()
+    update = {
+        field: getattr(typed, field) for field, _ in _KEY_PROVIDERS[provider] if getattr(typed, field)
+    }
+    registry.set_saved_keys(saved.model_copy(update=update))
+
+
+def _settings_address(fragment: str, **query: str) -> RedirectResponse:
+    """Back to the Settings page, at the part a form changed, with what its line should say."""
+    search = f"?{urlencode(query)}" if query else ""
+    return RedirectResponse(url=f"/settings{search}#{fragment}", status_code=303)
+
+
+@router.get("/settings")
+async def settings_page(
+    request: Request, saved: str = "", removed: str = "", error: str = ""
+) -> Response:
+    """Image models and your keys: the provider cards, the limits, the usage, the note on keys."""
+    deps: Deps = request.app.state.deps
+    context = _settings_context(
+        deps, _key_checks(request), saved=saved, removed=removed, error=error
+    )
+    return _page(request, "settings.html", context)
+
+
+@router.post("/settings/keys/{provider}")
+async def save_provider_key(request: Request, provider: str) -> Response:
+    """Save the provider's key fields, encrypted; empty fields leave a saved key as it is. The
+    key is never sent back: the card shows where it came from and its last four characters."""
+    deps: Deps = request.app.state.deps
+    provider = _key_provider(provider)
+    typed = await _typed_keys(request, provider)
+    if not typed.values():
+        return _settings_address(provider)
+    try:
+        _save_typed_keys(deps.photos, provider, typed)
+    except SecretUnavailable:
+        return _settings_address(provider, error="no_secret")
+    _key_checks(request).pop(provider, None)
+    return _settings_address(provider, saved=provider)
+
+
+@router.post("/settings/keys/{provider}/remove")
+async def remove_provider_key(request: Request, provider: str) -> Response:
+    """Remove the provider's saved key; a key in .env still applies."""
+    deps: Deps = request.app.state.deps
+    provider = _key_provider(provider)
+    registry = deps.photos
+    saved = registry.saved_keys()
+    fields = [field for field, _ in _KEY_PROVIDERS[provider]]
+    if any(getattr(saved, field) for field in fields):
+        try:
+            registry.set_saved_keys(saved.model_copy(update={field: "" for field in fields}))
+        except SecretUnavailable:
+            return _settings_address(provider, error="no_secret")
+    _key_checks(request).pop(provider, None)
+    return _settings_address(provider, removed=provider)
+
+
+@router.post("/settings/keys/{provider}/test")
+async def test_provider_key(request: Request, provider: str) -> Response:
+    """The free key check, and the card shows its message. With the fields empty it checks the
+    key in use; with a key typed, it checks that one and saves it only when it works, so a
+    failed check saves and changes nothing."""
+    deps: Deps = request.app.state.deps
+    provider = _key_provider(provider)
+    registry = deps.photos
+    typed = await _typed_keys(request, provider)
+    is_typed = bool(typed.values())
+    check = await registry.test_key(provider, typed if is_typed else None)  # type: ignore[arg-type]
+    saved = is_typed and check.ok
+    if saved:
+        try:
+            _save_typed_keys(registry, provider, typed)
+        except SecretUnavailable:
+            return _settings_address(provider, error="no_secret")
+    refused = KEY_REFUSED.format(provider=PROVIDER_LABELS[provider])
+    _key_checks(request)[provider] = {
+        "ok": check.ok,
+        "message": f"{check.message} {_TYPED_KEY_NOT_SAVED}" if is_typed and not saved else check.message,
+        # The pill says "Key refused" only for the key in use, not for one typed and not saved.
+        "refused": not check.ok and not is_typed and check.message == refused,
+    }
+    if saved:
+        return _settings_address(provider, saved=provider)
+    return _settings_address(provider)
+
+
+@router.post("/settings/models")
+async def save_photo_models(request: Request) -> Response:
+    """Which models the pickers offer (`offered`, one per ticked model), each model's preset
+    (`option:{model id}:{option}`) and the default (`default_model_id`). The default is always
+    offered."""
+    deps: Deps = request.app.state.deps
+    registry = deps.photos
+    form = await request.form()
+    known = {model.id: model for model in registry.catalogue}
+    current = registry.photo_settings()
+    offered = {value for value in form.getlist("offered") if isinstance(value, str) and value in known}
+    default_raw = form.get("default_model_id")
+    default = default_raw if isinstance(default_raw, str) and default_raw in known else current.default_model_id
+    offered.add(default)
+    options: dict[str, dict[str, str]] = {}
+    for key, value in form.multi_items():
+        if not key.startswith("option:") or not isinstance(value, str):
+            continue
+        model_id, _, name = key.removeprefix("option:").rpartition(":")
+        model = known.get(model_id)
+        if model is None or value not in model.option_choices.get(name, []):
+            continue
+        if model.options.get(name) != value:
+            options.setdefault(model_id, {})[name] = value
+    registry.save_photo_settings(
+        current.model_copy(
+            update={
+                "default_model_id": default,
+                "enabled_model_ids": [m.id for m in registry.catalogue if m.id in offered],
+                "options": options,
+            }
+        )
+    )
+    return _settings_address("models", saved="models")
+
+
+@router.post("/settings/limits")
+async def save_photo_limits(
+    request: Request,
+    daily_photo_limit_openai: Annotated[str, Form()] = "",
+    daily_photo_limit_google: Annotated[str, Form()] = "",
+    daily_spend_limit_usd: Annotated[str, Form()] = "",
+    auto_fallback_to_default: Annotated[str | None, Form()] = None,
+) -> Response:
+    """The daily photo limits for OpenAI and Google, the daily spend limit, and whether auto
+    mode finishes on the default model when a paid model stops. A field left empty or not a
+    number keeps its value."""
+    deps: Deps = request.app.state.deps
+    registry = deps.photos
+    current = registry.photo_settings()
+    limits = dict(current.daily_photo_limit)
+    for provider, raw in (("openai", daily_photo_limit_openai), ("google", daily_photo_limit_google)):
+        number = _whole_number(raw)
+        if number is not None:
+            limits[provider] = max(0, min(number, _MAX_PHOTO_LIMIT))  # type: ignore[index]
+    update: dict[str, Any] = {
+        "daily_photo_limit": limits,
+        "auto_fallback_to_default": auto_fallback_to_default is not None,
+    }
+    spend = _dollars(daily_spend_limit_usd)
+    if spend is not None:
+        update["daily_spend_limit_usd"] = round(max(0.0, min(spend, _MAX_SPEND_LIMIT)), 2)
+    registry.save_photo_settings(current.model_copy(update=update))
+    return _settings_address("limits", saved="limits")
+
+
+@router.get("/api/photo-estimate")
+async def photo_estimate(
+    request: Request,
+    model: str = "",
+    count: int = 1,
+    compare: Annotated[list[str] | None, Query()] = None,
+) -> JSONResponse:
+    """The estimate texts, from the catalogue (v6): `button`, Generate's words for `count` photos
+    from `model` (the default when it is empty or cannot be used); `auto_line`, the line under
+    the auto limits for `count` photos; and `compare_button`, the compare button's words for
+    the models in `compare`. `total_usd` is null when a price was not checked."""
+    deps: Deps = request.app.state.deps
+    registry = deps.photos
+    count = max(1, min(count, 50))
+    usable = {m.id: m for m in registry.usable_models()}
+    chosen = usable.get(model) or registry.default_model()
+    compared = [usable[i] for i in dict.fromkeys(compare or []) if i in usable][:_MAX_COMPARE]
+    total = _photos_cost(registry, [chosen] * count) if chosen is not None else 0.0
+    return JSONResponse(
+        {
+            "model": chosen.id if chosen is not None else "",
+            "count": count,
+            "total_usd": round(total, 4) if total is not None else None,
+            "button": _generate_label(registry, chosen, count),
+            "auto_line": _auto_line(registry, chosen, count),
+            "compare_button": _compare_label(registry, compared),
         }
     )
 

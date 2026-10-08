@@ -4,7 +4,7 @@
 // scrolls, the library's choices and progress line and its uploads' Remove, the
 // Studio form's auto limits, "Research first" and Start, the run and session
 // pages' polling, the session page's directions, reference notes and Add, the
-// post page's copy button).
+// post page's copy button; v6: the photo estimates, and the compare choices).
 (() => {
   "use strict";
 
@@ -151,7 +151,8 @@
     const syncLimits = () => {
       const auto = radios.some((radio) => radio.checked && radio.value === "auto");
       limits.hidden = !auto;
-      limits.querySelectorAll("input").forEach((input) => {
+      // v6: the Photo model too, so a manual session starts on the studio's default.
+      limits.querySelectorAll("input, select").forEach((input) => {
         input.disabled = !auto;
       });
     };
@@ -176,12 +177,57 @@
     // second session.
     guardSubmit(form);
 
+    // v6: the line under the limits says the most the session can cost on its Photo model,
+    // as the server works it out; without an answer, it says how many photos it may make.
     const budget = limits.querySelector('input[name="photo_budget"]');
     const hint = limits.querySelector("[data-auto-hint]");
+    const model = limits.querySelector("[data-auto-model]");
     if (!budget || !hint) return;
-    const syncHint = () => setText(hint, autoHintText(budget));
+    const estimate = latestOnly(fetchEstimate);
+    const syncHint = async () => {
+      const data = model ? await estimate({ model: model.value, count: fieldNumber(budget) }) : null;
+      if (data === undefined) return; // a newer change has asked since
+      setText(hint, data && data.auto_line ? data.auto_line : autoHintText(budget));
+    };
     budget.addEventListener("input", syncHint);
+    if (model) model.addEventListener("change", syncHint);
     syncHint();
+  }
+
+  // The number a number field holds as the server will read it: its own default when it is
+  // empty, otherwise the typed number held to the field's range.
+  function fieldNumber(input) {
+    const typed = parseInt(input.value, 10);
+    if (Number.isNaN(typed)) return parseInt(input.defaultValue, 10) || 1;
+    return Math.min(Number(input.max) || typed, Math.max(Number(input.min) || 1, typed));
+  }
+
+  // v6: the estimate texts from the catalogue (GET /api/photo-estimate): `button` for Generate,
+  // `auto_line` for the auto limits and `compare_button` for Compare. Null when there is no
+  // answer; the page keeps the words it has.
+  async function fetchEstimate(params) {
+    const query = new URLSearchParams();
+    if (params.model !== undefined) query.set("model", params.model);
+    if (params.count !== undefined) query.set("count", String(params.count));
+    (params.compare || []).forEach((id) => query.append("compare", id));
+    try {
+      const response = await fetch(`/api/photo-estimate?${query}`);
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  // Wraps an async function so that only the latest call's answer is used: an earlier call
+  // that answers late resolves to undefined.
+  function latestOnly(fn) {
+    let asked = 0;
+    return async (...args) => {
+      const ticket = ++asked;
+      const answer = await fn(...args);
+      return ticket === asked ? answer : undefined;
+    };
   }
 
   // A form whose answer waits on the analyst turns its button off once pressed, so a second
@@ -448,8 +494,58 @@
     guardSubmit(document.querySelector("[data-references-add]"));
     initAdjustForms();
     initDirections();
+    initModelPicker();
+    initCompare();
 
     if (page.dataset.poll === "true") pollSession(page.dataset.sessionId);
+  }
+
+  // v6: the Model picker and "Samples a round" keep Generate's estimate true, and "Generate
+  // again" (in the newest round's feedback form) sends the picker's model.
+  function initModelPicker() {
+    const picker = document.querySelector("[data-model-picker]");
+    if (!picker) return;
+    const generate = document.querySelector("[data-generate-button]");
+    const count = document.querySelector("[data-sample-count]");
+    const estimate = latestOnly(fetchEstimate);
+    const syncButton = async () => {
+      if (!generate || !count) return;
+      const data = await estimate({ model: picker.value, count: fieldNumber(count) });
+      if (data && data.button) generate.textContent = data.button;
+    };
+    picker.addEventListener("change", () => {
+      document.querySelectorAll("[data-model-mirror]").forEach((input) => {
+        input.value = picker.value;
+      });
+      syncButton();
+    });
+    if (count) count.addEventListener("input", syncButton);
+  }
+
+  // v6: "Compare models" takes two or three; past three the other boxes wait, and the button
+  // names how many and what they are expected to cost. While a run is live the page draws
+  // them off, and they stay off.
+  function initCompare() {
+    const button = document.querySelector("[data-compare-button]");
+    const boxes = Array.from(document.querySelectorAll("[data-compare-model]"));
+    if (!button || !boxes.length || button.disabled) return;
+    const estimate = latestOnly(fetchEstimate);
+    const sync = async () => {
+      const ticked = boxes.filter((box) => box.checked).map((box) => box.value);
+      boxes.forEach((box) => {
+        box.disabled = !box.checked && ticked.length >= 3;
+      });
+      button.disabled = ticked.length < 2 || ticked.length > 3;
+      if (ticked.length < 2) {
+        button.textContent = "Compare models";
+        estimate({}); // so a slower answer for an earlier choice is dropped
+        return;
+      }
+      const data = await estimate({ compare: ticked });
+      if (data && data.compare_button) button.textContent = data.compare_button;
+    };
+    boxes.forEach((box) => box.addEventListener("change", sync));
+    sync();
   }
 
   async function postSampleReaction(sampleId, reaction, comment) {

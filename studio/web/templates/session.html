@@ -50,6 +50,8 @@
       <button type="submit" class="btn btn-small">Research again</button>
     </form>
     {% endif %}
+    {#- v6: a failure whose fix is a key, a model or a limit links to the Settings page. #}
+    {% if failed_needs_settings is defined and failed_needs_settings %}<a class="btn-link" href="/settings">Open Settings</a>{% endif %}
     <a class="btn-link" href="/runs/{{ failed_run.run.id }}">See the run</a>
   </div>
 </section>
@@ -376,16 +378,55 @@
           {%- endfor %}
         </span>
       </fieldset>
-      <div class="field-small sample-count-field">
-        <label for="sample_count">Samples a round</label>
-        <input type="number" id="sample_count" name="sample_count" min="1" max="{{ max_samples }}" value="{{ session.sample_count }}" {{ off }} />
-        <p class="hint">Photos made today: {{ photos_today }}</p>
+      {#- "Samples a round" and, beside it (v6), the round's model with its price: the two wrap
+          together. Generate saves the model on the session, and "Generate again" uses it. #}
+      <div class="round-settings">
+        <div class="field-small sample-count-field">
+          <label for="sample_count">Samples a round</label>
+          <input type="number" id="sample_count" name="sample_count" min="1" max="{{ max_samples }}" value="{{ session.sample_count }}" data-sample-count {{ off }} />
+          <p class="hint">Photos made today: {{ photos_today }}</p>
+        </div>
+        {% if photo_models is defined and photo_models %}
+        <div class="field model-field">
+          <label for="photo_model_id">Model</label>
+          <select id="photo_model_id" name="photo_model_id" data-model-picker {{ off }}>
+            {% for choice in photo_models %}
+            <option value="{{ choice.id }}" {{ "selected" if choice.id == photo_model_selected else "" }}>{{ choice.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
       </div>
     </div>
 
+    {#- v6: one photo from each of two or three models, from this prompt, ranked together. The
+        button sends `compare`, so Generate ignores the ticks. #}
+    {% if photo_models is defined and photo_models|length > 1 %}
+    <details class="compare-models" data-compare>
+      <summary>Compare models</summary>
+      <fieldset class="compare-fieldset">
+        <legend class="sr-only">Models to compare</legend>
+        <ul class="compare-list">
+          {% for choice in photo_models %}
+          <li>
+            <label class="check-option">
+              <input type="checkbox" name="compare_model_ids" value="{{ choice.id }}" data-compare-model {{ off }} />
+              <span>{{ choice.label }}</span>
+            </label>
+          </li>
+          {% endfor %}
+        </ul>
+        <p class="hint">Choose two or three. Each makes one photo from this prompt, and the critic ranks them together.</p>
+        <div class="actions">
+          <button type="submit" name="compare" value="on" class="btn" data-compare-button {{ off }}>{{ compare_label }}</button>
+        </div>
+      </fieldset>
+    </details>
+    {% endif %}
+
     <div class="actions">
-      {#- The view's primary when the samples are the next step. #}
-      <button type="submit" class="btn{{ ' btn-primary' if session.status == 'drafted' else '' }}" {{ off }}>Generate</button>
+      {#- The view's primary when the samples are the next step. v6: with the round's estimate. #}
+      <button type="submit" class="btn{{ ' btn-primary' if session.status == 'drafted' else '' }}" data-generate-button {{ off }}>{{ generate_label if generate_label is defined else "Generate" }}</button>
       {% if show_reset %}
       <button type="submit" form="reset-form" class="btn-link">Reset to the agent's version</button>
       {% endif %}
@@ -434,6 +475,9 @@
   {% for round in rounds %}
   <div class="panel round-panel">
     <h3 class="section-title">{% if round.round == 0 %}Your photos{% else %}Round {{ round.round }}{% endif %}</h3>
+    {#- v6: a compare round's models and cost, or the model that stood in for a lost one. #}
+    {% set round_line = round_lines.get(round.round, "") if round_lines is defined else "" %}
+    {% if round_line %}<p class="round-meta">{{ round_line }}</p>{% endif %}
     {% if round.review and round.review.note %}
     <p class="round-note">{{ round.review.note }}</p>
     {% elif round.ranking_skipped %}
@@ -446,7 +490,7 @@
           {% if sample.image_path %}
           <img src="/media/{{ sample.image_path }}" alt="" loading="lazy" />
           {% else %}
-          <p class="sample-error">{{ sample.error }}</p>
+          <p class="sample-error">{{ sample.error }}{% if settings_link_ids is defined and sample.id in settings_link_ids %} <a href="/settings">Open Settings</a>{% endif %}</p>
           {% endif %}
         </div>
 
@@ -506,6 +550,9 @@
     {#- Feedback is about a generated round, so the designer's own photos take none. #}
     {% if loop.first and round.round != 0 %}
     <form method="post" action="/sessions/{{ session.id }}/feedback" class="round-feedback-form">
+      {#- v6: "Generate again" makes the round on the Model picker's choice; app.js keeps this
+          in step with the picker. #}
+      {% if photo_model_selected is defined and photo_model_selected %}<input type="hidden" name="photo_model_id" value="{{ photo_model_selected }}" data-model-mirror />{% endif %}
       <label class="sr-only" for="feedback-{{ round.round }}">Feedback on this round</label>
       <textarea id="feedback-{{ round.round }}" name="text" rows="2" placeholder="What should change?" {{ off }}>{{ round.feedback.text if round.feedback else "" }}</textarea>
       <div class="actions">

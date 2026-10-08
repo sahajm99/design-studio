@@ -60,6 +60,7 @@
     ("archive", "/archive", "Archive"),
     ("editor", "/editor", "Editor"),
     ("runs", "/runs", "Runs"),
+    ("settings", "/settings", "Settings"),
   ] %}
   <body class="app-canvas{{ ' is-wide' if wide_page else '' }}">
     <header class="bar-slot">
@@ -91,7 +92,8 @@
       {% if demo_mode or not has_photo_source %}
       <div class="banner-stack">
         {% if demo_mode %}
-        <p class="banner">Demo mode: no model key is set, so posts are written by a stand-in.</p>
+        {#- A page may say what demo mode means for it (v6: the Settings page's line). #}
+        <p class="banner">{{ demo_banner if demo_banner is defined and demo_banner else "Demo mode: no model key is set, so posts are written by a stand-in." }}</p>
         {% endif %}
         {% if not has_photo_source %}
         <p class="banner">No photo source is set, so samples cannot be made.</p>
