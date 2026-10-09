@@ -3,6 +3,9 @@
 v6: a provider is one adapter, and each of its models is one catalogue entry, so `generate`
 takes the model and its options. Every result says which model made the photo and what it
 cost, and `test_key` checks a key for free, without making a photo.
+
+v6 Part B: `generate` also takes the product photos the model is to keep (`images`, prepared
+PNG files), and the result says how many it was sent.
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from __future__ import annotations
 import base64
 import binascii
 import io
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -51,6 +55,22 @@ KEY_WORKS = "The key works. {count} image models are visible."
 KEY_WORKS_ONE = "The key works. 1 image model is visible."
 DEMO_KEY_CHECK = "Demo mode: no image model is called, and keys are not used."
 
+# v6 Part B: what the designer reads when the product photos did not all reach the model
+# (spec v6, B7), and the sentence code puts before the prompt by the session's fidelity (B3).
+PRODUCT_DECLINED = "The model declined the product photo."
+PRODUCT_UNREADABLE = "Product photo {number} could not be read and was left out."
+WORDS_ONLY = "This model cannot see product photos; the photo was made from the words alone."
+TOO_MANY_PRODUCTS = "{label} takes {photos}; the first {count} were sent."
+TOO_MANY_PRODUCTS_ONE = "{label} takes 1 product photo; the first was sent."
+FIDELITY_EXACT = (
+    "Use the product in the reference image exactly as it is: its shape, its tooth shade, its "
+    "gum colour and every titanium sleeve. Change only its setting, its light and its framing."
+)
+FIDELITY_GUIDE = (
+    "Use the product in the reference image as the subject. Keep its design and its colours, "
+    "and turn it to suit the scene."
+)
+
 
 class PhotoUnavailable(Exception):
     """No photo could be produced. The message is shown to the designer as it is,
@@ -69,6 +89,7 @@ class PhotoResult(BaseModel):
     cost_usd: float | None  # None when the cost is not known
     cost_basis: PriceBasis
     usage: dict[str, int] = Field(default_factory=dict)  # the provider's own counts, if any
+    input_images: int = 0  # v6 Part B: how many product photos the model was sent
 
 
 class KeyCheck(BaseModel):
@@ -92,12 +113,15 @@ class PhotoProvider(Protocol):
         model: ImageModel,
         options: dict[str, str],
         seed: int | None = None,
+        images: Sequence[Path] = (),
     ) -> PhotoResult:
         """Write one photo for the prompt to out_path, or raise PhotoUnavailable.
 
         The photo may come back at any size; the renderer crops it to fit. `options` is the
         model's preset with the studio's overrides. A seed, when the provider supports one,
-        makes repeated calls differ.
+        makes repeated calls differ. `images` (v6 Part B) are the product photos the model
+        keeps, prepared as PNG files, at most the model's `max_input_images`; a provider that
+        takes none is never given any.
         """
         ...
 
@@ -109,6 +133,20 @@ class PhotoProvider(Protocol):
 def key_works(count: int) -> str:
     """The key check's line for a key that sees `count` image models."""
     return KEY_WORKS_ONE if count == 1 else KEY_WORKS.format(count=count)
+
+
+def fidelity_sentence(fidelity: str) -> str:
+    """The sentence code puts before the photo prompt when product photos go with it: keep the
+    product exactly ("exact"), or use it as a guide ("guide")."""
+    return FIDELITY_GUIDE if fidelity == "guide" else FIDELITY_EXACT
+
+
+def too_many_products(label: str, limit: int) -> str:
+    """The line for a round with more product photos than the model takes: "Nano Banana 2.1
+    takes 3 product photos; the first 3 were sent." """
+    if limit == 1:
+        return TOO_MANY_PRODUCTS_ONE.format(label=label)
+    return TOO_MANY_PRODUCTS.format(label=label, photos=f"{limit} product photos", count=limit)
 
 
 def write_photo(encoded: str, out_path: Path, provider: str) -> None:

@@ -160,7 +160,8 @@ class FakeLlm(BaseLlm):
             text = json.dumps(_fake_prompt_draft(context).model_dump())
         elif role == ROLE_CRITIC:
             digest = _digest_request(llm_request)
-            text = json.dumps(_fake_sample_review(digest).model_dump())
+            products = bool(context.get("product_photos"))
+            text = json.dumps(_fake_sample_review(digest, products=products).model_dump())
         elif role == ROLE_CRITIC_RANK:
             text = json.dumps(_fake_round_ranking(context).model_dump())
         elif role == ROLE_JUDGE:
@@ -239,6 +240,16 @@ _PHOTO_PROMPT_TEMPLATE = (
     "at most, the subject's own material doing the work. Mood: calm, precise and quiet. No "
     "text, no logos, no watermarks."
 )
+# v6 Part B: with product photos, the prompt describes only the scene around the product, never
+# its shape, colours or parts, so the words cannot override the photo.
+_PRODUCT_PROMPT_TEMPLATE = (
+    "The prosthesis in the product photo, photographed as a premium studio still life. "
+    "Setting: a seamless, evenly lit {mode} backdrop close to the colour {hex}, with nothing "
+    "else in frame. Surface: a low, matte plinth that lets the product stand clear. Light: "
+    "soft and directional, with a gentle falloff into the backdrop. Lens: 85mm, straight on, "
+    "the prosthesis in the product photo centred with generous empty space around it. Mood: "
+    "calm, precise and quiet. No text, no logos, no watermarks."
+)
 
 _SENTENCE_END_RE = re.compile(r"[.!?]")
 # v3.1: a brief naming a person or a scene gets the full-bleed layout, so demo drafts vary.
@@ -274,7 +285,8 @@ def _draft_prompt(context: dict[str, Any]) -> PromptDraft:
 
     subject = " ".join(words[:6]).lower()
     hex_colour = (context.get("backdrops") or {}).get(mode, "")
-    photo_prompt = _PHOTO_PROMPT_TEMPLATE.format(subject=subject, mode=mode, hex=hex_colour)
+    template = _PRODUCT_PROMPT_TEMPLATE if context.get("product_photos") else _PHOTO_PROMPT_TEMPLATE
+    photo_prompt = template.format(subject=subject, mode=mode, hex=hex_colour)
 
     headline = _six_word_headline(brief)
     if headline in (context.get("recent_headlines") or []):
@@ -526,8 +538,14 @@ def _calm_areas(byte: int) -> list[CalmArea]:
     return [_CALM_AREA_OPTIONS[index]] if index < len(_CALM_AREA_OPTIONS) else []
 
 
-def _fake_sample_review(digest: bytes) -> SampleReview:
+def _fake_sample_review(digest: bytes, *, products: bool = False) -> SampleReview:
+    """The stand-in critic's review, from the digest of what it was shown. With product photos
+    (v6 Part B) it also scores product fidelity, 2 to 5, and a 2 carries `product_changed`, so
+    demo mode shows the score and, now and then, the flag."""
     flags: list[CriticFlag] = ["busy"] if digest[3] % 5 == 0 else []
+    fidelity = 2 + digest[7] % 4 if products else None
+    if fidelity == 2:
+        flags.append("product_changed")
     return SampleReview(
         on_brief=2 + digest[0] % 4,
         brand_fit=2 + digest[1] % 4,
@@ -538,6 +556,7 @@ def _fake_sample_review(digest: bytes) -> SampleReview:
         subject_x=_SUBJECT_X_OPTIONS[digest[4] % 3],
         subject_y=_SUBJECT_Y_OPTIONS[digest[5] % 3],
         calm_areas=_calm_areas(digest[6]),
+        product_fidelity=fidelity,
     )
 
 

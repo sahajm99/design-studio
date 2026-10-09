@@ -28,8 +28,20 @@
     {#- The designer's own pictures of how this post should look (v5); the server keeps six. #}
     <div class="field reference-images-field">
       <label for="references">Reference images</label>
-      <input type="file" id="references" name="references" multiple accept="image/png,image/jpeg" />
+      <input type="file" id="references" name="references" multiple accept="image/png,image/jpeg" data-reference-files />
       <p class="hint">How this post should look. The studio draws on them and never copies them. Up to six.</p>
+      {#- v6 Part B: the box makes the reference images product photos (three at most), which
+          the image model receives; its label carries the rights line, so ticking it confirms
+          the right to use them. The Photo model then lists only the models that take photos. #}
+      {% if products_checkbox is defined %}
+      <label class="check-option products-option">
+        <input type="checkbox" name="references_are_products" value="true" data-references-products />
+        <span class="products-option-text">
+          <span>{{ products_checkbox }}</span>
+          <span class="products-option-rights">{{ rights_line }}</span>
+        </span>
+      </label>
+      {% endif %}
     </div>
     <div class="mode-row">
       <fieldset class="pill-group mode-switch">
@@ -78,9 +90,10 @@
           <label for="photo_model_id">Photo model</label>
           <select id="photo_model_id" name="photo_model_id" data-auto-model>
             {% for choice in photo_models %}
-            <option value="{{ choice.id }}" {{ "selected" if choice.id == default_photo_model_id else "" }}>{{ choice.label }}</option>
+            <option value="{{ choice.id }}" data-takes-photos="{{ 'true' if choice.takes_photos else 'false' }}" {{ "selected" if choice.id == default_photo_model_id else "" }}>{{ choice.label }}</option>
             {% endfor %}
           </select>
+          {% if no_photo_model_for_products is defined %}<p class="hint" data-no-photo-model hidden>{{ no_photo_model_for_products }}</p>{% endif %}
         </div>
         {% endif %}
         <p class="hint auto-limits-hint" data-auto-hint>{{ auto_line if auto_line is defined and auto_line else "Auto mode makes up to 6 photos on its own." }}</p>

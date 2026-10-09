@@ -4,7 +4,9 @@
 // scrolls, the library's choices and progress line and its uploads' Remove, the
 // Studio form's auto limits, "Research first" and Start, the run and session
 // pages' polling, the session page's directions, reference notes and Add, the
-// post page's copy button; v6: the photo estimates, and the compare choices).
+// post page's copy button; v6: the photo estimates, and the compare choices; v6 Part B: the
+// references' Style · Product toggle with its rights line, the fidelity choice, and the
+// Studio page's "These are product photos").
 (() => {
   "use strict";
 
@@ -183,14 +185,46 @@
     const hint = limits.querySelector("[data-auto-hint]");
     const model = limits.querySelector("[data-auto-model]");
     if (!budget || !hint) return;
+    // v6 Part B: "These are product photos" makes the chosen reference images product photos
+    // (three at most), so the Photo model offers only the models that take photos, and the
+    // estimate counts their input.
+    const productsBox = form.querySelector("[data-references-products]");
+    const files = form.querySelector("[data-reference-files]");
+    const productPhotos = () =>
+      productsBox && productsBox.checked && files ? Math.min(3, files.files.length) : 0;
     const estimate = latestOnly(fetchEstimate);
     const syncHint = async () => {
-      const data = model ? await estimate({ model: model.value, count: fieldNumber(budget) }) : null;
+      const params = { model: model ? model.value : "", count: fieldNumber(budget), products: productPhotos() };
+      const data = model ? await estimate(params) : null;
       if (data === undefined) return; // a newer change has asked since
       setText(hint, data && data.auto_line ? data.auto_line : autoHintText(budget));
     };
+    const syncModels = () => {
+      if (!model) return;
+      const photosOnly = Boolean(productsBox && productsBox.checked);
+      const options = Array.from(model.options);
+      options.forEach((option) => {
+        const words = option.dataset.takesPhotos === "false";
+        option.disabled = photosOnly && words;
+        option.hidden = photosOnly && words;
+      });
+      const usable = options.filter((option) => !option.disabled);
+      if (model.selectedOptions[0] && model.selectedOptions[0].disabled && usable.length) {
+        model.value = usable[0].value;
+      }
+      const none = form.querySelector("[data-no-photo-model]");
+      if (none) none.hidden = !(photosOnly && usable.length === 0);
+    };
     budget.addEventListener("input", syncHint);
     if (model) model.addEventListener("change", syncHint);
+    if (productsBox) {
+      productsBox.addEventListener("change", () => {
+        syncModels();
+        syncHint();
+      });
+    }
+    if (files) files.addEventListener("change", syncHint);
+    syncModels();
     syncHint();
   }
 
@@ -210,6 +244,8 @@
     if (params.model !== undefined) query.set("model", params.model);
     if (params.count !== undefined) query.set("count", String(params.count));
     (params.compare || []).forEach((id) => query.append("compare", id));
+    // v6 Part B: the product photos that go with each photo, whose input cost is included.
+    if (params.products) query.set("products", String(params.products));
     try {
       const response = await fetch(`/api/photo-estimate?${query}`);
       if (!response.ok) return null;
@@ -496,6 +532,8 @@
     initDirections();
     initModelPicker();
     initCompare();
+    initReferenceRoles();
+    initAutosaveForms();
 
     if (page.dataset.poll === "true") pollSession(page.dataset.sessionId);
   }
@@ -508,9 +546,10 @@
     const generate = document.querySelector("[data-generate-button]");
     const count = document.querySelector("[data-sample-count]");
     const estimate = latestOnly(fetchEstimate);
+    const products = Number(picker.dataset.products || "0");
     const syncButton = async () => {
       if (!generate || !count) return;
-      const data = await estimate({ model: picker.value, count: fieldNumber(count) });
+      const data = await estimate({ model: picker.value, count: fieldNumber(count), products });
       if (data && data.button) generate.textContent = data.button;
     };
     picker.addEventListener("change", () => {
@@ -530,6 +569,8 @@
     const boxes = Array.from(document.querySelectorAll("[data-compare-model]"));
     if (!button || !boxes.length || button.disabled) return;
     const estimate = latestOnly(fetchEstimate);
+    const picker = document.querySelector("[data-model-picker]");
+    const products = picker ? Number(picker.dataset.products || "0") : 0;
     const sync = async () => {
       const ticked = boxes.filter((box) => box.checked).map((box) => box.value);
       boxes.forEach((box) => {
@@ -541,11 +582,71 @@
         estimate({}); // so a slower answer for an earlier choice is dropped
         return;
       }
-      const data = await estimate({ compare: ticked });
+      const data = await estimate({ compare: ticked, products });
       if (data && data.compare_button) button.textContent = data.compare_button;
     };
     boxes.forEach((box) => box.addEventListener("change", sync));
     sync();
+  }
+
+  // v6 Part B: a reference's Style · Product toggle saves itself as it changes. The first
+  // switch to Product shows the rights line instead, and ticking it saves the switch; the
+  // server saves a Product switch only with it ticked. Without this script, the toggle, the
+  // rights line and Save are all shown, and Save sends them.
+  function initReferenceRoles() {
+    document.querySelectorAll("[data-reference-role]").forEach((form) => {
+      const save = form.querySelector("[data-role-save]");
+      const rights = form.querySelector("[data-reference-rights]");
+      const tick = rights && rights.querySelector('input[type="checkbox"]');
+      const card = form.closest("[data-reference-card]");
+      if (save) save.hidden = true;
+      if (rights) rights.hidden = true;
+      const askForRights = (asking) => {
+        if (!rights || !tick) return;
+        rights.hidden = !asking;
+        tick.required = asking;
+        if (card) card.classList.toggle("is-confirming", asking);
+        if (asking) tick.focus();
+      };
+      form.querySelectorAll('input[name="role"]').forEach((radio) => {
+        radio.addEventListener("change", () => {
+          if (!radio.checked) return;
+          if (radio.value === form.dataset.role) {
+            askForRights(false); // back to what is saved: nothing to send
+            return;
+          }
+          if (radio.value === "product" && form.dataset.confirmed !== "true") {
+            askForRights(true);
+            return;
+          }
+          submitForm(form);
+        });
+      });
+      if (tick) {
+        tick.addEventListener("change", () => {
+          if (tick.checked) submitForm(form);
+        });
+      }
+    });
+  }
+
+  // A form of radio choices that saves itself as a choice changes (the product fidelity); its
+  // Save button is for a page without this script.
+  function initAutosaveForms() {
+    document.querySelectorAll("[data-autosave-form]").forEach((form) => {
+      const save = form.querySelector("[data-autosave-button]");
+      if (save) save.hidden = true;
+      form.querySelectorAll('input[type="radio"]').forEach((radio) => {
+        radio.addEventListener("change", () => {
+          if (radio.checked) submitForm(form);
+        });
+      });
+    });
+  }
+
+  function submitForm(form) {
+    if (typeof form.requestSubmit === "function") form.requestSubmit();
+    else form.submit();
   }
 
   async function postSampleReaction(sampleId, reaction, comment) {

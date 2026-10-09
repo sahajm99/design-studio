@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, StringConstraints, ValidationError
 
 from studio.brand import logo_for_mode
 from studio.contracts import (
+    MAX_PRODUCT_PHOTOS,
     AutoSettings,
     AutoState,
     BrandKit,
@@ -42,10 +43,12 @@ from studio.contracts import (
     PhotoSettings,
     PhotoSide,
     Post,
+    ProductFidelity,
     PromptVersion,
     QualityBar,
     QualityBarSource,
     Reaction,
+    ReferenceRole,
     ResearchReport,
     RoundFeedback,
     Run,
@@ -74,7 +77,7 @@ from studio.library.sources import (
     is_web_link,
 )
 from studio.library.taste import build_taste_profile
-from studio.media import agent_copy_path, agent_picture
+from studio.media import agent_copy_path, agent_picture, product_copy_path
 from studio.photos.base import KEY_REFUSED, PROVIDER_LABELS
 from studio.photos.catalogue import ImageModel
 from studio.photos.registry import MODEL_GONE, NO_PHOTO_MODEL, PhotoRegistry
@@ -120,7 +123,13 @@ from studio.workflows import (
     run_samples,
     run_scout,
 )
-from studio.workflows.shared import QUALITY_BAR_SETTING, designer_references, plural, quoted
+from studio.workflows.shared import (
+    QUALITY_BAR_SETTING,
+    designer_references,
+    plural,
+    product_references,
+    quoted,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +201,26 @@ _MAX_COMPARE = 3
 _MIN_COMPARE = 2
 # The auto settings' Photos field starts at this many, as studio.html writes it.
 _AUTO_PHOTOS_START = 6
+
+# v6 Part B: product photos the image model sees (spec v6, B6), as the pages write them.
+PRODUCT_LINE = (
+    "Product photos go to the image model. It keeps the product and makes a new scene around it."
+)
+FIDELITY_CHOICES: tuple[tuple[str, str], ...] = (
+    ("exact", "Keep the product exactly"),
+    ("guide", "Use it as a guide"),
+)
+RIGHTS_LINE = "This is our own product photo, or one we may use."
+PRODUCTS_CHECKBOX = "These are product photos"
+# After a words-only model's name and price in a picker, on a session with product photos.
+CANNOT_SEE_PRODUCTS = "{label} · cannot see product photos"
+# On a sample card: how many product photos its model received, and the critic's fidelity.
+WITH_PRODUCT_PHOTOS = "With {photos}"
+FIDELITY_SCORE = "Product fidelity {score} of 5"
+FIDELITY_NOT_SCORED = "Product fidelity not scored"
+NO_PHOTO_MODEL_FOR_PRODUCTS = (
+    "No model that takes product photos is set up. Add an OpenAI or Google key in Settings."
+)
 
 STEP_LABELS: dict[str, str] = {
     "load_context": "Gather context",
@@ -349,9 +378,15 @@ _MAX_REFERENCE_NOTE_CHARS = 80
 # The session page's status line after references were sent, by the code its address
 # carries: more files than the six a session keeps, or a file the studio cannot use.
 _REFERENCES_LIMITED = "Six references kept; the rest were left out."
+# v6 Part B: a session takes three product photos; a photo is marked Product only with the
+# rights line ticked.
+_PRODUCTS_LIMITED = "A session takes three product photos; the rest stay Style."
+_RIGHTS_NEEDED = "A photo becomes Product only with the line about the right to use it ticked."
 _REFERENCE_STATUS_LINES: dict[str, str] = {
     "limited": _REFERENCES_LIMITED,
     "refused": UPLOAD_REFUSED,
+    "products": _PRODUCTS_LIMITED,
+    "rights": _RIGHTS_NEEDED,
 }
 # The analyst cards a reference as it is uploaded, and is waited for this long at most.
 _REFERENCE_CARD_SECONDS = 20
@@ -496,11 +531,18 @@ def _model_label(registry: PhotoRegistry, model_id: str) -> str:
     return model.label if model is not None else model_id
 
 
-def _model_choices(registry: PhotoRegistry) -> list[dict[str, str]]:
-    """What a model picker offers: the usable models, each with its price beside its name."""
-    return [
-        {"id": model.id, "label": registry.price_label(model)} for model in registry.usable_models()
-    ]
+def _model_choices(registry: PhotoRegistry, products: int = 0) -> list[dict[str, Any]]:
+    """What a model picker offers: the usable models, each with its price beside its name, and
+    whether it takes product photos (v6 Part B). With `products`, the session's product photos,
+    a words-only model's label adds "cannot see product photos"."""
+    choices: list[dict[str, Any]] = []
+    for model in registry.usable_models():
+        label = registry.price_label(model)
+        takes_photos = registry.takes_photos(model)
+        if products and not takes_photos:
+            label = CANNOT_SEE_PRODUCTS.format(label=label)
+        choices.append({"id": model.id, "label": label, "takes_photos": takes_photos})
+    return choices
 
 
 def _session_model(registry: PhotoRegistry, session: StudioSession) -> ImageModel | None:
@@ -510,37 +552,43 @@ def _session_model(registry: PhotoRegistry, session: StudioSession) -> ImageMode
     return own or registry.default_model()
 
 
-def _photos_cost(registry: PhotoRegistry, models: list[ImageModel]) -> float | None:
+def _photos_cost(
+    registry: PhotoRegistry, models: list[ImageModel], products: int = 0
+) -> float | None:
     """What one photo from each of `models` is expected to cost, from the catalogue: nothing for
-    a free model; None when a paid model's price was not checked."""
+    a free model; None when a paid model's price was not checked. With `products` product
+    photos (v6 Part B), each model's photo adds the input cost of as many as it takes."""
     total = 0.0
     for model in models:
         if not model.paid:
             continue
-        price = registry.estimate(model)
+        price = registry.estimate(model, input_images=products)
         if price is None or not model.checked:
             return None
         total += price
     return total
 
 
-def _generate_label(registry: PhotoRegistry, model: ImageModel | None, count: int) -> str:
-    """The Generate button's words: "Generate 3 · about $0.15", or "Generate 3" on a free model."""
+def _generate_label(
+    registry: PhotoRegistry, model: ImageModel | None, count: int, products: int = 0
+) -> str:
+    """The Generate button's words: "Generate 3 · about $0.15", or "Generate 3" on a free model;
+    with product photos, their input cost included ("Generate 3 · about $0.18")."""
     if model is None or not model.paid:
         return GENERATE_FREE.format(count=count)
-    total = _photos_cost(registry, [model] * count)
+    total = _photos_cost(registry, [model] * count, products)
     if total is None:
         return GENERATE_NOT_CHECKED.format(count=count)
     return GENERATE_PAID.format(count=count, total=total)
 
 
-def _compare_label(registry: PhotoRegistry, models: list[ImageModel]) -> str:
+def _compare_label(registry: PhotoRegistry, models: list[ImageModel], products: int = 0) -> str:
     """The compare button's words for the ticked models, "Compare 3 models · about $0.10";
     "Compare models" until two are ticked."""
     count = len(models)
     if count < _MIN_COMPARE:
         return COMPARE_IDLE
-    total = _photos_cost(registry, models)
+    total = _photos_cost(registry, models, products)
     if total is None:
         return COMPARE_NOT_CHECKED.format(count=count)
     if total == 0:
@@ -548,7 +596,9 @@ def _compare_label(registry: PhotoRegistry, models: list[ImageModel]) -> str:
     return COMPARE_PAID.format(count=count, total=total)
 
 
-def _auto_line(registry: PhotoRegistry, model: ImageModel | None, photos: int) -> str:
+def _auto_line(
+    registry: PhotoRegistry, model: ImageModel | None, photos: int, products: int = 0
+) -> str:
     """The line under the auto limits: the most an auto session can cost on its model, "At most
     6 photos: up to $0.30 on GPT Image 2.5 Flare."; "" when no model can be used."""
     if model is None:
@@ -556,7 +606,7 @@ def _auto_line(registry: PhotoRegistry, model: ImageModel | None, photos: int) -
     photos_text = plural(photos, "photo")
     if not model.paid:
         return AUTO_FREE.format(photos=photos_text, label=model.label)
-    total = _photos_cost(registry, [model] * photos)
+    total = _photos_cost(registry, [model] * photos, products)
     if total is None:
         return AUTO_NOT_CHECKED.format(photos=photos_text, label=model.label)
     return AUTO_PAID.format(photos=photos_text, total=total, label=model.label)
@@ -594,6 +644,43 @@ def _round_lines(
                 label=_model_label(registry, session.photo_model_id),
                 default=_model_label(registry, model_ids[0]),
             )
+        # v6 Part B: what happened to the product photos, once for a round of one model (a
+        # compare round says it on each card instead, since its models differ).
+        if len(model_ids) <= 1:
+            notes = list(dict.fromkeys(s.product_note for s in samples if s.product_note))
+            if notes:
+                lines[group["round"]] = " ".join([lines.get(group["round"], ""), *notes]).strip()
+    return lines
+
+
+def _product_card_lines(rounds: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Each sample's product-photo lines (v6 Part B), by sample id: `received`, "With 1 product
+    photo" when its model was sent any; `fidelity`, the critic's "Product fidelity 4 of 5", or
+    "Product fidelity not scored" when its model had product photos and the critic gave none;
+    `note`, what happened to the product photos, on a compare round's cards only."""
+    lines: dict[str, dict[str, str]] = {}
+    for group in rounds:
+        samples: list[Sample] = group["samples"]
+        compared = len({sample.model_id for sample in samples if sample.model_id}) > 1
+        for sample in samples:
+            received = len(sample.product_reference_ids)
+            review = sample.review
+            fidelity = ""
+            if review is not None and review.product_fidelity is not None:
+                fidelity = FIDELITY_SCORE.format(score=review.product_fidelity)
+            elif review is not None and received:
+                fidelity = FIDELITY_NOT_SCORED
+            entry = {
+                "received": (
+                    WITH_PRODUCT_PHOTOS.format(photos=plural(received, "product photo"))
+                    if received and sample.image_path
+                    else ""
+                ),
+                "fidelity": fidelity,
+                "note": sample.product_note if compared else "",
+            }
+            if any(entry.values()):
+                lines[sample.id] = entry
     return lines
 
 
@@ -946,6 +1033,11 @@ def _studio_context(deps: Deps, *, error: str | None = None, brief_value: str = 
         "photo_models": _model_choices(registry),
         "default_photo_model_id": default.id if default is not None else "",
         "auto_line": _auto_line(registry, default, _AUTO_PHOTOS_START),
+        # v6 Part B: "These are product photos" under the reference images, its label carrying
+        # the rights line; ticked, the Photo model lists only the models that take photos.
+        "products_checkbox": PRODUCTS_CHECKBOX,
+        "rights_line": RIGHTS_LINE,
+        "no_photo_model_for_products": NO_PHOTO_MODEL_FOR_PRODUCTS,
         # v4: "Research first" and the month's searches, unless the kit turns research off.
         "research_enabled": deps.kit.research.enabled,
         "searches_this_month": deps.store.search_credits_this_month(),
@@ -1557,15 +1649,34 @@ def _session_context(
     registry = deps.photos
     session_model = _session_model(registry, session)
     failed_run = _failed_run_context(store, session, rounds)
+    references = designer_references(store, session.id)
+    # v6 Part B: the product photos the image model receives with the prompt, three at most.
+    products = len(product_references(references))
+    referenced = {reference.upload_id for reference in references}
     return {
         "session": session,
         # v6: the Model picker (the session's model chosen), the Generate button's estimate,
         # the compare round's choices, and a line under a round where one is due.
-        "photo_models": _model_choices(registry),
+        "photo_models": _model_choices(registry, products),
         "photo_model_selected": session_model.id if session_model is not None else "",
-        "generate_label": _generate_label(registry, session_model, session.sample_count),
+        "generate_label": _generate_label(
+            registry, session_model, session.sample_count, products
+        ),
         "compare_label": COMPARE_IDLE,
         "round_lines": _round_lines(registry, session, rounds),
+        # v6 Part B: the brief panel's product photos (the line, the fidelity choice, the rights
+        # line, the brand's uploads to add from) and each card's product-photo lines.
+        "product_count": products,
+        "products_full": products >= MAX_PRODUCT_PHOTOS,
+        "product_line": PRODUCT_LINE,
+        "fidelity_choices": FIDELITY_CHOICES,
+        "rights_line": RIGHTS_LINE,
+        "brand_uploads": [
+            _upload_entry(upload)
+            for upload in store.list_uploads(deps.kit.id)
+            if upload.id not in referenced
+        ],
+        "product_card_lines": _product_card_lines(rounds),
         # Failed samples, and a failed run, whose fix is on the Settings page link to it.
         "settings_link_ids": {
             sample.id
@@ -1609,7 +1720,7 @@ def _session_context(
         "source_sample": store.get_sample(session.source_sample_id) if session.source_sample_id else None,
         "draft_button_label": "Draft again" if session.current_prompt_version_id else "Draft",
         # v5: the designer's references, oldest first, beside the quality bar.
-        "references": designer_references(store, session.id),
+        "references": references,
         "references_line": references_line,
         **_layout_context(deps, session),
         **_research_parts_context(deps, session, scout_running=scout_running),
@@ -2010,7 +2121,7 @@ def _edited_layout(
 
 
 async def _attach_references(
-    deps: Deps, session: StudioSession, files: list[UploadFile]
+    deps: Deps, session: StudioSession, files: list[UploadFile], *, as_products: bool = False
 ) -> list[str]:
     """Keep the chosen files as the session's references, in the order given, until it has
     six, and give back the codes of what the session page's status line should say.
@@ -2019,9 +2130,15 @@ async def _attach_references(
     agent copy and recorded on the session. A file the studio cannot use is skipped
     ("refused"); once the session has six, the files left are not read ("limited"). Then the
     analyst cards them all at once, so the wait is one card's at most, never six in a row.
+
+    `as_products` (v6 Part B, the Studio page's "These are product photos", whose label is the
+    rights line) marks each one Product with its rights confirmed now, up to the three product
+    photos a session takes; the rest stay Style ("products").
     """
     store = deps.store
-    room = _MAX_SESSION_REFERENCES - len(designer_references(store, session.id))
+    existing = designer_references(store, session.id)
+    room = _MAX_SESSION_REFERENCES - len(existing)
+    product_room = MAX_PRODUCT_PHOTOS - len(product_references(existing))
     codes: list[str] = []
     # Each reference with what its card is made from: bytes, their extension and a label.
     to_card: list[tuple[SessionReference, bytes, str, str]] = []
@@ -2050,6 +2167,11 @@ async def _attach_references(
         reference = SessionReference(
             session_id=session.id, upload_id=upload.id, image_path=upload.image_path
         )
+        if as_products and product_room > 0:
+            reference.role, reference.rights_confirmed_at = "product", now()
+            product_room -= 1
+        elif as_products and "products" not in codes:
+            codes.append("products")
         # Recorded before the analyst is asked, so a card that never comes leaves it in place.
         store.add_session_reference(reference)
         card_data, card_extension = await _agent_copy(store, upload)
@@ -2150,6 +2272,7 @@ async def create_session(
     research_choice: Annotated[bool, Form()] = False,
     references: Annotated[list[UploadFile] | None, File()] = None,
     photo_model_id: Annotated[str | None, Form()] = None,
+    references_are_products: Annotated[bool, Form()] = False,
 ) -> Response:
     """Start a session from the brief: a draft by hand, or the whole session on its own in auto mode.
 
@@ -2163,6 +2286,8 @@ async def create_session(
     agent of that run sees them; files past the sixth, and files the studio cannot use, are
     left out and the session page's status line says so. `photo_model_id` (v6) sets the
     session's photo model; without it, the session uses the studio's default.
+    `references_are_products` (v6 Part B), the box whose label is the rights line, makes the
+    reference images product photos, up to three, so the first run's agents already see them.
     """
     deps: Deps = request.app.state.deps
     stripped = brief.strip()
@@ -2188,7 +2313,9 @@ async def create_session(
         session.auto_settings = _auto_settings(max_rounds, photo_budget, stop_score)
         session.auto_state = AutoState()
     deps.store.save_session(session)
-    codes = await _attach_references(deps, session, references or [])
+    codes = await _attach_references(
+        deps, session, references or [], as_products=references_are_products
+    )
 
     kind: RunKind = "auto" if mode == "auto" else "scout" if session.research_on else "draft"
     run = deps.store.create_run(kind, deps.kit.id, brief=session.brief, session_id=session.id)
@@ -2259,6 +2386,84 @@ async def remove_reference(
     session = _require_session(store, session_id)
     reference = _session_reference(store, session, reference_id)
     store.delete_session_reference(reference.id)
+    return RedirectResponse(url=f"/sessions/{session.id}#references", status_code=303)
+
+
+@router.post("/sessions/{session_id}/references/{reference_id}/role")
+async def set_reference_role(
+    request: Request,
+    session_id: str,
+    reference_id: str,
+    role: Annotated[ReferenceRole, Form()],
+    rights: Annotated[bool, Form()] = False,
+) -> RedirectResponse:
+    """Mark a session reference Style or Product (v6 Part B). The first switch to Product is
+    saved only with the rights line ticked, and the moment is kept with the reference; a
+    session takes three product photos. Library references are not session references, so
+    they can never be marked Product."""
+    store: Store = request.app.state.store
+    session = _require_session(store, session_id)
+    reference = _session_reference(store, session, reference_id)
+    if role == "product" and reference.role != "product":
+        others = product_references(designer_references(store, session.id))
+        if len(others) >= MAX_PRODUCT_PHOTOS:
+            return RedirectResponse(
+                url=_references_address(session.id, ["products"], fragment="references"),
+                status_code=303,
+            )
+        if reference.rights_confirmed_at is None and not rights:
+            return RedirectResponse(
+                url=_references_address(session.id, ["rights"], fragment="references"),
+                status_code=303,
+            )
+        reference.rights_confirmed_at = reference.rights_confirmed_at or now()
+    reference.role = role
+    store.update_session_reference(reference)
+    return RedirectResponse(url=f"/sessions/{session.id}#references", status_code=303)
+
+
+@router.post("/sessions/{session_id}/references/from-upload/{upload_id}")
+async def add_reference_from_upload(
+    request: Request, session_id: str, upload_id: str
+) -> RedirectResponse:
+    """Add one of the brand's uploads to the session as a reference, Style by default (v6 Part
+    B), so the real product photo is uploaded once per brand and reused. Up to six references
+    in all, as for files; an upload the session already has is not added twice."""
+    deps: Deps = request.app.state.deps
+    store = deps.store
+    session = _require_session(store, session_id)
+    upload = _brand_upload(store, deps.kit.id, upload_id)
+    if upload is None:
+        raise _not_found()
+    existing = designer_references(store, session.id)
+    if any(reference.upload_id == upload.id for reference in existing):
+        return RedirectResponse(url=f"/sessions/{session.id}#references", status_code=303)
+    if len(existing) >= _MAX_SESSION_REFERENCES:
+        return RedirectResponse(
+            url=_references_address(session.id, ["limited"], fragment="references"),
+            status_code=303,
+        )
+    reference = SessionReference(
+        session_id=session.id, upload_id=upload.id, image_path=upload.image_path
+    )
+    store.add_session_reference(reference)
+    card_data, card_extension = await _agent_copy(store, upload)
+    card = await _reference_card(deps, card_data, card_extension, quoted(upload.name))
+    if card is not None:
+        reference.card = card
+        store.update_session_reference(reference)
+    return RedirectResponse(url=f"/sessions/{session.id}#references", status_code=303)
+
+
+@router.post("/sessions/{session_id}/product-fidelity")
+async def set_product_fidelity(
+    request: Request, session_id: str, fidelity: Annotated[ProductFidelity, Form()]
+) -> RedirectResponse:
+    """How closely the image model keeps the session's product (v6 Part B): "exact", keep the
+    product exactly, or "guide", use it as a guide. The next round follows it."""
+    store: Store = request.app.state.store
+    session = _require_session(store, session_id)
+    store.save_session(session.model_copy(update={"product_fidelity": fidelity}))
     return RedirectResponse(url=f"/sessions/{session.id}#references", status_code=303)
 
 
@@ -3047,8 +3252,10 @@ async def remove_upload(request: Request, upload_id: str) -> RedirectResponse:
     upload = store.get_upload(upload_id)
     if upload is None or upload.brand_id != deps.kit.id:
         raise _not_found()
-    # Only files in the brand's uploads folder are deleted, whatever path the row holds.
+    # Only files in the brand's uploads folder are deleted, whatever path the row holds. v6 Part
+    # B: the product copy the image model is sent goes too.
     copies = [agent_copy_path(upload.image_path, transparent=alpha) for alpha in (False, True)]
+    copies.append(product_copy_path(upload.image_path))
     for image_path in (upload.image_path, *copies):
         path = upload_file(image_path, store.uploads_dir, upload.brand_id)
         if path is not None:
@@ -3285,26 +3492,29 @@ async def photo_estimate(
     model: str = "",
     count: int = 1,
     compare: Annotated[list[str] | None, Query()] = None,
+    products: int = 0,
 ) -> JSONResponse:
     """The estimate texts, from the catalogue (v6): `button`, Generate's words for `count` photos
     from `model` (the default when it is empty or cannot be used); `auto_line`, the line under
     the auto limits for `count` photos; and `compare_button`, the compare button's words for
-    the models in `compare`. `total_usd` is null when a price was not checked."""
+    the models in `compare`. `total_usd` is null when a price was not checked. `products` (v6
+    Part B) is how many product photos go with each photo, whose input cost is included."""
     deps: Deps = request.app.state.deps
     registry = deps.photos
     count = max(1, min(count, 50))
+    products = max(0, min(products, MAX_PRODUCT_PHOTOS))
     usable = {m.id: m for m in registry.usable_models()}
     chosen = usable.get(model) or registry.default_model()
     compared = [usable[i] for i in dict.fromkeys(compare or []) if i in usable][:_MAX_COMPARE]
-    total = _photos_cost(registry, [chosen] * count) if chosen is not None else 0.0
+    total = _photos_cost(registry, [chosen] * count, products) if chosen is not None else 0.0
     return JSONResponse(
         {
             "model": chosen.id if chosen is not None else "",
             "count": count,
             "total_usd": round(total, 4) if total is not None else None,
-            "button": _generate_label(registry, chosen, count),
-            "auto_line": _auto_line(registry, chosen, count),
-            "compare_button": _compare_label(registry, compared),
+            "button": _generate_label(registry, chosen, count, products),
+            "auto_line": _auto_line(registry, chosen, count, products),
+            "compare_button": _compare_label(registry, compared, products),
         }
     )
 

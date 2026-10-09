@@ -8,10 +8,18 @@ own. The answer's `data[0].b64_json` is the photo and `usage.output_tokens` pric
 catalogue's price a token; an answer without usage is priced at the list price instead.
 
 The key check is free: `GET /v1/models`, counting the image models the key can see.
+
+v6 Part B: with product photos, the request goes to `POST /v1/images/edits` instead, as
+multipart: `model`, one `image[]` file for each product photo (PNG), `prompt`, `size`,
+`quality`, `n: 1` and `output_format: png`. `input_fidelity` is not sent: OpenAI's guide does not
+document it for GPT Image 2.5. The cost then adds the input image tokens the usage reports, at
+the catalogue's input token price, and a safety refusal reads "The model declined the product
+photo."
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +34,7 @@ from studio.photos.base import (
     NO_PHOTO_IN_ANSWER,
     OPENAI_CREDIT,
     OPENAI_VERIFY,
+    PRODUCT_DECLINED,
     PROVIDER_BUSY,
     PROVIDER_PROBLEM,
     KeyCheck,
@@ -45,6 +54,7 @@ from studio.photos.transport import (
 from studio.secrets import redact
 
 _GENERATIONS_URL = "https://api.openai.com/v1/images/generations"
+_EDITS_URL = "https://api.openai.com/v1/images/edits"
 _MODELS_URL = "https://api.openai.com/v1/models"
 _SIZE_MULTIPLE = 16
 _KEY_CHECK_TIMEOUT = 30.0
@@ -75,6 +85,7 @@ class OpenAIPhotoProvider:
         model: ImageModel,
         options: dict[str, str],
         seed: int | None = None,
+        images: Sequence[Path] = (),
     ) -> PhotoResult:
         # `seed` is not sent: the Images API has no such field.
         if not self.api_key:
@@ -88,18 +99,37 @@ class OpenAIPhotoProvider:
         }
         if options.get("quality"):
             body["quality"] = options["quality"]
+        sent = list(images)[: model.max_input_images] if model.max_input_images else []
+        # Read once, so a retry sends the same bytes again.
+        files = [
+            ("image[]", (f"product-{number}.png", path.read_bytes(), "image/png"))
+            for number, path in enumerate(sent, start=1)
+        ]
+        fields = {name: str(value) for name, value in body.items()}
 
         async with client_for(self.client) as client:
-            response = await send(
-                lambda: client.post(
+
+            def request() -> Any:
+                if files:
+                    return client.post(
+                        _EDITS_URL,
+                        data=fields,
+                        files=files,
+                        headers=self._headers(),
+                        timeout=self.timeout,
+                    )
+                return client.post(
                     _GENERATIONS_URL, json=body, headers=self._headers(), timeout=self.timeout
-                ),
+                )
+
+            response = await send(
+                request,
                 provider=_LABEL,
                 timeout=self.timeout,
                 retry_rate_limit=_passing_rate_limit,
             )
         if not response.is_success:
-            raise self._unavailable(_failure_message(response, model))
+            raise self._unavailable(_failure_message(response, model, with_images=bool(files)))
 
         try:
             answer: Any = response.json()
@@ -114,7 +144,7 @@ class OpenAIPhotoProvider:
 
         raw_usage = answer.get("usage") if isinstance(answer, dict) else None
         usage = _counts(raw_usage)
-        cost, basis = _cost(model, options, usage)
+        cost, basis = _cost(model, options, usage, input_images=len(files))
         return PhotoResult(
             path=str(out_path),
             provider=f"{self.name}:{model.short_id}",
@@ -123,6 +153,7 @@ class OpenAIPhotoProvider:
             cost_usd=cost,
             cost_basis=basis,
             usage=usage,
+            input_images=len(files),
         )
 
     async def test_key(self) -> KeyCheck:
@@ -166,8 +197,11 @@ class OpenAIPhotoProvider:
         return PhotoUnavailable(self._redacted(message))
 
 
-def _failure_message(response: httpx.Response, model: ImageModel) -> str:
-    """The plain message for a refused request, by what OpenAI answered."""
+def _failure_message(
+    response: httpx.Response, model: ImageModel, *, with_images: bool = False
+) -> str:
+    """The plain message for a refused request, by what OpenAI answered. With product photos
+    sent, a safety refusal is on the input they are part of (spec v6, B7)."""
     status = response.status_code
     error = provider_error(response)
     text = error.text
@@ -180,7 +214,7 @@ def _failure_message(response: httpx.Response, model: ImageModel) -> str:
     if status == 429:
         return PROVIDER_BUSY.format(provider=_LABEL)
     if _is_safety_refusal(error):
-        return with_detail(DECLINED, error.message)
+        return with_detail(PRODUCT_DECLINED if with_images else DECLINED, error.message)
     if status in (403, 404) or "model_not_found" in text or "does not exist" in text:
         return MODEL_NOT_ALLOWED.format(label=model.label)
     if status >= 500:
@@ -207,22 +241,43 @@ def _round_up(value: int) -> int:
 
 
 def _counts(raw: Any) -> dict[str, int]:
-    """The usage's top-level counts: `input_tokens`, `output_tokens`, `total_tokens`."""
+    """The usage's top-level counts: `input_tokens`, `output_tokens`, `total_tokens`; and, from
+    `input_tokens_details` (v6 Part B), `input_image_tokens` and `input_text_tokens`."""
     if not isinstance(raw, dict):
         return {}
-    return {
+    counts = {
         key: value
         for key, value in raw.items()
         if isinstance(value, int) and not isinstance(value, bool)
     }
+    details = raw.get("input_tokens_details")
+    if isinstance(details, dict):
+        for name in ("image_tokens", "text_tokens"):
+            value = details.get(name)
+            if isinstance(value, int) and not isinstance(value, bool):
+                counts[f"input_{name}"] = value
+    return counts
 
 
 def _cost(
-    model: ImageModel, options: dict[str, str], usage: dict[str, int]
+    model: ImageModel, options: dict[str, str], usage: dict[str, int], *, input_images: int = 0
 ) -> tuple[float | None, PriceBasis]:
     """The photo's cost: its output tokens at the catalogue's price a token when OpenAI
-    reported them, else the list price for the options (None when neither is known)."""
+    reported them, else the list price for the options (None when neither is known). With
+    product photos sent (v6 Part B), their input image tokens are added at the catalogue's input
+    token price: as reported, else all the input tokens reported, else the catalogue's estimate."""
     tokens = usage.get("output_tokens")
     if tokens is not None and model.output_token_price_usd > 0:
-        return tokens * model.output_token_price_usd, "usage"
-    return model.price_for(options), "list_price"
+        cost = tokens * model.output_token_price_usd
+        if input_images:
+            image_tokens = usage.get("input_image_tokens", usage.get("input_tokens"))
+            cost += (
+                image_tokens * model.input_token_price_usd
+                if image_tokens is not None
+                else model.input_cost(input_images)
+            )
+        return cost, "usage"
+    price = model.price_for(options)
+    if price is not None and input_images:
+        price += model.input_cost(input_images)
+    return price, "list_price"

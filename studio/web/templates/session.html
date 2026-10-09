@@ -106,11 +106,61 @@
         {% if references_line %}
         <p class="result-message" role="status">{{ references_line }}</p>
         {% endif %}
+        {#- v6 Part B: with any product photo, the line saying where product photos go, and the
+            session's fidelity choice under it; the choice saves itself as it changes (app.js). #}
+        {#- `part_b` is false only while an older server renders this template (before a restart). #}
+        {% set part_b = product_count is defined %}
+        {% set product_count = product_count if part_b else 0 %}
+        {% if product_count %}
+        <p class="product-line">{{ product_line }}</p>
+        <form method="post" action="/sessions/{{ session.id }}/product-fidelity" class="fidelity-form" data-autosave-form>
+          <fieldset class="pill-group">
+            <legend class="sr-only">How the image model keeps the product</legend>
+            <span class="segmented">
+              {% for value, label in fidelity_choices %}
+              <label class="pill-option">
+                <input type="radio" name="fidelity" value="{{ value }}" {{ "checked" if session.product_fidelity == value else "" }} {{ off }} />
+                <span>{{ label }}</span>
+              </label>
+              {% endfor %}
+            </span>
+          </fieldset>
+          <button type="submit" class="btn btn-small" data-autosave-button {{ off }}>Save</button>
+        </form>
+        {% endif %}
         {% if references %}
         <ul class="reference-row">
           {% for reference in references %}
-          <li class="reference-card">
-            <span class="reference-thumb"><img src="/media/{{ reference.image_path }}" alt="Reference {{ loop.index }}" loading="lazy" /></span>
+          {% set is_product = reference.role is defined and reference.role == "product" %}
+          {% set confirmed = reference.rights_confirmed_at is defined and reference.rights_confirmed_at %}
+          <li class="reference-card{{ ' is-product' if is_product else '' }}" data-reference-card>
+            <span class="reference-thumb"><img src="/media/{{ reference.image_path }}" alt="Reference {{ loop.index }}" loading="lazy" />{% if is_product %}<span class="badge reference-badge">Product</span>{% endif %}</span>
+            {% if part_b %}
+            {#- Style or Product. The first switch to Product asks for the rights line, and is
+                saved only with it ticked (app.js shows it then; the server checks it). #}
+            <form method="post" action="/sessions/{{ session.id }}/references/{{ reference.id }}/role" class="reference-role" data-reference-role data-role="{{ 'product' if is_product else 'style' }}" data-confirmed="{{ 'true' if confirmed else 'false' }}">
+              <fieldset class="pill-group">
+                <legend class="sr-only">Reference {{ loop.index }} is a</legend>
+                <span class="segmented segmented-small">
+                  <label class="pill-option">
+                    <input type="radio" name="role" value="style" {{ "checked" if not is_product else "" }} {{ off }} />
+                    <span>Style</span>
+                  </label>
+                  <label class="pill-option">
+                    <input type="radio" name="role" value="product" {{ "checked" if is_product else "" }} {{ off }}{% if products_full and not is_product %} disabled title="A session takes three product photos."{% endif %} />
+                    <span>Product</span>
+                  </label>
+                </span>
+              </fieldset>
+              {% if not confirmed %}
+              <label class="check-option reference-rights" data-reference-rights>
+                <input type="checkbox" name="rights" value="true" {{ off }} />
+                <span>{{ rights_line }}</span>
+              </label>
+              {% endif %}
+              <button type="submit" class="btn btn-small" data-role-save {{ off }}>Save</button>
+            </form>
+            {% endif %}
             <form method="post" action="/sessions/{{ session.id }}/references/{{ reference.id }}/note" class="reference-note">
               <label class="sr-only" for="reference-note-{{ reference.id }}">Note on reference {{ loop.index }}</label>
               {#- The card shows a few words of the note, so its title holds all of it; the field
@@ -133,6 +183,25 @@
           </div>
           {% if not references %}<p class="hint">Pictures of how this post should look.</p>{% endif %}
         </form>
+        {#- v6 Part B: Add from the brand's uploads, as the editor's picker shows them, so the
+            real product photo is uploaded once and reused. Each is added as Style. #}
+        {% if brand_uploads is defined and brand_uploads %}
+        <details class="references-uploads">
+          <summary>From your uploads</summary>
+          <ul class="editor-shelf-grid">
+            {% for upload in brand_uploads %}
+            <li>
+              <form method="post" action="/sessions/{{ session.id }}/references/from-upload/{{ upload.id }}" class="inline-form" data-references-pick>
+                <button type="submit" class="upload-pick" {{ off }}>
+                  <span class="upload-thumb"><img src="{{ upload.url }}" alt="" loading="lazy" /></span>
+                  <span class="upload-name">{{ upload.name or "Untitled" }}</span>
+                </button>
+              </form>
+            </li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
       </div>
     </div>
 
@@ -389,7 +458,7 @@
         {% if photo_models is defined and photo_models %}
         <div class="field model-field">
           <label for="photo_model_id">Model</label>
-          <select id="photo_model_id" name="photo_model_id" data-model-picker {{ off }}>
+          <select id="photo_model_id" name="photo_model_id" data-model-picker data-products="{{ product_count }}" {{ off }}>
             {% for choice in photo_models %}
             <option value="{{ choice.id }}" {{ "selected" if choice.id == photo_model_selected else "" }}>{{ choice.label }}</option>
             {% endfor %}
@@ -497,14 +566,24 @@
         <div class="sample-body">
           {#- v6: the model that made the photo and its cost; none for uploads and old samples. #}
           {% set model_badge = sample_badges.get(sample.id) if sample_badges is defined else "" %}
-          {% if model_badge %}<p class="badge sample-model">{{ model_badge }}</p>{% endif %}
+          {#- v6 Part B: how many product photos the model received, the critic's fidelity score,
+              and, on a compare round's card, what happened to the product photos. #}
+          {% set product_lines = product_card_lines.get(sample.id, {}) if product_card_lines is defined else {} %}
+          {% if model_badge or product_lines.received %}
+          <div class="sample-badges">
+            {% if model_badge %}<p class="badge sample-model">{{ model_badge }}</p>{% endif %}
+            {% if product_lines.received %}<p class="badge sample-products">{{ product_lines.received }}</p>{% endif %}
+          </div>
+          {% endif %}
+          {% if product_lines.note %}<p class="sample-product-note">{{ product_lines.note }}</p>{% endif %}
           {% if sample.recommended %}<p class="card-flag">Recommended</p>{% endif %}
           {% if sample.review %}
           <p class="sample-verdict" title="{{ sample.review.suggested_change }}">{{ sample.review.verdict }}</p>
           <p class="sample-scores">On brief {{ sample.review.on_brief }} · brand {{ sample.review.brand_fit }} · craft {{ sample.review.craft }} · overall {{ sample.review.overall }}</p>
+          {% if product_lines.fidelity %}<p class="sample-scores sample-fidelity">{{ product_lines.fidelity }}</p>{% endif %}
           {% if sample.review.flags %}
           <div class="flag-row">
-            {% for flag in sample.review.flags %}<span class="flag-chip">{{ flag.replace("_", " ") }}</span>{% endfor %}
+            {% for flag in sample.review.flags %}<span class="flag-chip">{{ "Product changed" if flag == "product_changed" else flag.replace("_", " ") }}</span>{% endfor %}
           </div>
           {% endif %}
           {% if sample.rank %}

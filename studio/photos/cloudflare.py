@@ -21,12 +21,18 @@ entry is given, as v5 called it), every photo reports a cost of 0 on the free da
 a server error gets one more try, and the free key check lists the account's text-to-image
 models. Every message passes through `redact`, so neither the token nor the account id can
 reach a card or the log.
+
+v6 Part B: FLUX.2 klein stays words only (its catalogue entry has `max_input_images: 0`) until
+its image fields are confirmed, so the registry never hands this adapter a product photo, and
+`images`, when given anyway, is not sent: the photo is made from the words alone, and the round
+says so ("This model cannot see product photos; ...").
 """
 
 from __future__ import annotations
 
 import base64
 import io
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -85,7 +91,9 @@ class CloudflarePhotoProvider:
         model: ImageModel | None = None,
         options: dict[str, str] | None = None,
         seed: int | None = None,
+        images: Sequence[Path] = (),
     ) -> PhotoResult:
+        # `images` is not sent: words only in v6 (see the module docstring).
         if not self.account_id or not self.api_token:
             raise PhotoUnavailable(CREDENTIALS_NOT_SET)
 

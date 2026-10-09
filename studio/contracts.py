@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def new_id() -> str:
@@ -313,6 +313,15 @@ class Upload(BaseModel):
     created_at: datetime = Field(default_factory=now)
 
 
+# v6 Part B: a session reference guides the agents as a picture of the look ("style"), or is a
+# photo of the real product that the image model receives with the prompt ("product").
+ReferenceRole = Literal["style", "product"]
+# How closely the image model keeps the product: exactly as photographed, or as a guide.
+ProductFidelity = Literal["exact", "guide"]
+# The most product photos one session takes; every one goes to the image model on every round.
+MAX_PRODUCT_PHOTOS = 3
+
+
 class SessionReference(BaseModel):
     """A designer's picture of how one post should look, attached to a session."""
 
@@ -322,6 +331,10 @@ class SessionReference(BaseModel):
     image_path: str
     note: str = Field(default="", max_length=80)
     card: StyleCard | None = None  # the analyst's card, when it could be written
+    # v6 Part B: a product photo goes to the image model. The designer confirms the right to use
+    # it once, when first marking it Product, and the moment is kept with it.
+    role: ReferenceRole = "style"
+    rights_confirmed_at: datetime | None = None
     created_at: datetime = Field(default_factory=now)
 
 
@@ -492,9 +505,17 @@ CriticFlag = Literal[
     "off_subject",
     "unrealistic",
     "wrong_materials",
+    # v6 Part B: the product in the photo is not the one in the product photo.
+    "product_changed",
 ]
-# A sample with one of these is never the recommended pick.
-HARD_FLAGS: tuple[str, ...] = ("text_in_image", "logo_in_image", "distorted_anatomy", "unrealistic")
+# A sample with one of these is never the recommended pick, and auto mode never ships one.
+HARD_FLAGS: tuple[str, ...] = (
+    "text_in_image",
+    "logo_in_image",
+    "distorted_anatomy",
+    "unrealistic",
+    "product_changed",
+)
 SubjectX = Literal["left", "centre", "right"]
 SubjectY = Literal["top", "middle", "bottom"]
 CalmArea = Literal["top", "bottom", "left", "right"]
@@ -571,6 +592,24 @@ class SampleReview(BaseModel):
     subject_x: SubjectX = "centre"
     subject_y: SubjectY = "middle"
     calm_areas: list[CalmArea] = Field(default_factory=list)
+    # v6 Part B: how true the product stayed to the product photos, 1 to 5; None when the round
+    # had no product photo, or the critic could not score it.
+    product_fidelity: int | None = None
+
+    @field_validator("product_fidelity", mode="before")
+    @classmethod
+    def _fidelity_in_range(cls, value: object) -> object:
+        """A fidelity score outside 1 to 5, or not a whole number, counts as not scored, so the
+        rest of the review is kept."""
+        if isinstance(value, str):
+            try:
+                value = float(value.strip())
+            except ValueError:
+                return None
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        whole = int(value)
+        return whole if whole == value and 1 <= whole <= 5 else None
 
     @property
     def overall(self) -> float:
@@ -630,6 +669,11 @@ class Sample(BaseModel):
     model_id: str = ""
     cost_usd: float | None = None
     cost_basis: PriceBasis | None = None
+    # v6 Part B: the session references the image model received as product photos, and the line
+    # saying what happened to the product photos when not all of them reached it ("" when they
+    # all did, or the round had none).
+    product_reference_ids: list[str] = Field(default_factory=list)
+    product_note: str = ""
     seed: int | None = None
     error: str | None = None  # why generation failed
     review: SampleReview | None = None
@@ -827,6 +871,8 @@ class StudioSession(BaseModel):
     chosen_direction: Direction | None = None  # a copy, with the designer's edits
     # v6: the catalogue model this session's rounds use; empty means the studio's default.
     photo_model_id: str = ""
+    # v6 Part B: how closely the image model keeps the product in the session's product photos.
+    product_fidelity: ProductFidelity = "exact"
     created_at: datetime = Field(default_factory=now)
     updated_at: datetime = Field(default_factory=now)
 

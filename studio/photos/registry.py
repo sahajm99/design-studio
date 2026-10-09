@@ -15,6 +15,11 @@ The daily limits are UTC days. The store counts the photos saved so far; the reg
 counts, in memory, the paid photos asked for and not answered yet (held) and those made but
 not saved yet (their round is still being reviewed), so photos asked for at once cannot
 together pass a limit.
+
+v6 Part B: `input_limit` says how many product photos a model takes with the prompt, from its
+catalogue entry (0: words only); in demo mode the stand-in takes three for every model, so
+the whole product-photo path shows without a key. Estimates add the product photos' input
+cost.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from studio.photos.base import (
 )
 from studio.photos.catalogue import ImageModel, ProviderId
 from studio.photos.cloudflare import CloudflarePhotoProvider
+from studio.photos.fake import MAX_INPUT_IMAGES as STAND_IN_INPUT_IMAGES
 from studio.photos.fake import FakePhotoProvider
 from studio.photos.google import GooglePhotoProvider
 from studio.photos.openai import OpenAIPhotoProvider
@@ -138,6 +144,16 @@ class PhotoRegistry:
         """Whether the stand-in makes every model's photos: demo mode, or the tests' override."""
         mode = self._settings.photo_provider
         return mode == "fake" or (mode == "auto" and self._settings.demo_mode)
+
+    def input_limit(self, model: ImageModel) -> int:
+        """How many product photos the model takes with the prompt (v6 Part B): its catalogue
+        entry's `max_input_images`, 0 for a words-only model; the stand-in's three for every
+        model in demo mode, since the stand-in makes the photo."""
+        return STAND_IN_INPUT_IMAGES if self.stand_in else model.max_input_images
+
+    def takes_photos(self, model: ImageModel) -> bool:
+        """Whether the model can see product photos (v6 Part B)."""
+        return self.input_limit(model) > 0
 
     # ------------------------------------------------------------ settings
 
@@ -304,9 +320,16 @@ class PhotoRegistry:
 
     # ------------------------------------------------------------ prices and costs
 
-    def estimate(self, model: ImageModel, options: dict[str, str] | None = None) -> float | None:
-        """What one photo is expected to cost, from the catalogue; None when not known."""
-        return model.price_for(options if options is not None else self.options_for(model))
+    def estimate(
+        self, model: ImageModel, options: dict[str, str] | None = None, input_images: int = 0
+    ) -> float | None:
+        """What one photo is expected to cost, from the catalogue; None when not known. With
+        product photos (v6 Part B), as many as the model takes of `input_images` add their
+        input cost."""
+        price = model.price_for(options if options is not None else self.options_for(model))
+        if price is None:
+            return None
+        return price + model.input_cost(min(input_images, self.input_limit(model)))
 
     def price_label(self, model: ImageModel) -> str:
         """The model with its price, for a picker: "GPT Image 2.5 Flare · about $0.05 a photo",
@@ -353,10 +376,12 @@ class PhotoRegistry:
 
     # ------------------------------------------------------------ daily limits
 
-    def check_limits(self, model: ImageModel, options: dict[str, str] | None = None) -> None:
+    def check_limits(
+        self, model: ImageModel, options: dict[str, str] | None = None, input_images: int = 0
+    ) -> None:
         """Raise LimitReached when one more photo from the model would pass today's photo limit
-        for its provider, or the studio's spend limit with this photo's estimate. Free models
-        and the stand-in have no limit."""
+        for its provider, or the studio's spend limit with this photo's estimate (its product
+        photos' input cost included). Free models and the stand-in have no limit."""
         if self.stand_in or not model.paid:
             return
         photo_settings = self.photo_settings()
@@ -371,17 +396,19 @@ class PhotoRegistry:
                 photos = f"{limit} photo" if limit == 1 else f"{limit} photos"
                 raise LimitReached(PHOTO_LIMIT.format(provider=provider, photos=photos))
         spent = self._store.spend_since(since) + sum(item.cost for item in pending)
-        estimate = self.estimate(model, options) or 0.0
+        estimate = self.estimate(model, options, input_images) or 0.0
         if spent + estimate > photo_settings.daily_spend_limit_usd + _CENT_FRACTION:
             raise LimitReached(SPEND_LIMIT.format(limit=photo_settings.daily_spend_limit_usd))
 
-    def hold(self, sample: Sample, model: ImageModel, options: dict[str, str]) -> None:
+    def hold(
+        self, sample: Sample, model: ImageModel, options: dict[str, str], input_images: int = 0
+    ) -> None:
         """Check the limits for the sample's photo and count it as asked for, until `record`.
         Raises LimitReached, holding nothing, when a limit is reached."""
-        self.check_limits(model, options)
+        self.check_limits(model, options, input_images)
         if self.stand_in or not model.paid:
             return
-        cost = self.estimate(model, options) or 0.0
+        cost = self.estimate(model, options, input_images) or 0.0
         self._held[sample.id] = _Pending(model.provider, cost, _today())
 
     def record(self, sample: Sample) -> None:

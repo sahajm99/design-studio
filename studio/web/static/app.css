@@ -4089,6 +4089,130 @@ details.panel[open] > summary {
   }
 }
 
+/* ------------------------------------------------- product photos (v6 Part B) */
+
+/* A reference card is wide enough for its small Style · Product toggle; while it asks for the
+   rights line it widens, so the line reads in a few lines rather than a word a line. */
+.reference-card {
+  width: 128px;
+}
+
+.reference-card.is-confirming {
+  width: 232px;
+}
+
+.reference-thumb {
+  position: relative;
+}
+
+/* "Product" on the thumbnail of a product photo: the neutral badge, lifted off the picture. */
+.reference-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: var(--white);
+  box-shadow: var(--shadow-pill);
+  color: var(--ink);
+}
+
+.reference-role {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The segmented control at a card's size. */
+.segmented-small {
+  gap: 2px;
+  padding: 3px;
+}
+
+.segmented-small .pill-option span {
+  padding: 3px 7px;
+  font-size: 12px;
+}
+
+.reference-rights {
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.reference-rights input {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* The line on where product photos go, and the fidelity choice under it, above the cards. */
+.product-line {
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.fidelity-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* "From your uploads": the editor's picker of the brand's uploads, as a disclosure under Add. */
+.references-uploads > summary {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.references-uploads[open] > summary {
+  margin-bottom: 10px;
+}
+
+.references-uploads .inline-form,
+.references-uploads .upload-pick {
+  height: 100%;
+}
+
+/* A sample's badges side by side: its model and cost, and the product photos it was sent. */
+.sample-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sample-products {
+  font-variant-numeric: tabular-nums;
+}
+
+.sample-product-note {
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+
+/* The Studio page's "These are product photos": the box, its words and the rights line. */
+.studio-form .reference-images-field .products-option {
+  align-items: flex-start;
+  margin: 10px 0 0;
+}
+
+.products-option input {
+  flex: none;
+  margin-top: 2px;
+}
+
+.products-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.products-option-rights {
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+
 /* --------------------------------------------------------------------- motion */
 
 /* Motion answers a click or a scroll on the glass curve; with reduced motion, nothing

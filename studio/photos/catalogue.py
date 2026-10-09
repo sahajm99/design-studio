@@ -29,6 +29,10 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 CATALOGUE_PATH = Path(__file__).with_name("catalogue.yaml")
+# v6 Part B: the input tokens one product photo is expected to cost, for the estimate before a
+# round. A photo of at most 2048 pixels comes to about a thousand on both paid providers; the
+# cost after the round uses the tokens each provider reports.
+INPUT_TOKENS_PER_PHOTO = 1000
 
 CATALOGUE_INVALID = "The model catalogue is invalid: {entry}, field {field}: {problem}"
 NOT_A_LIST = "The model catalogue is invalid: it needs a list of models under `models`."
@@ -58,6 +62,10 @@ class ImageModel(BaseModel):
     option_prices: dict[str, dict[str, float]] = Field(default_factory=dict)
     max_parallel: int = Field(default=3, ge=1, le=12)  # photos asked for at once on this model
     checked: str = ""  # "2026-10-08": when the price was checked; empty when it was not
+    # v6 Part B: how many product photos the model takes with the prompt (0: words only), and
+    # what an input token costs, for the product photos it is sent.
+    max_input_images: int = Field(default=0, ge=0, le=16)
+    input_token_price_usd: float = Field(default=0.0, ge=0)
 
     @property
     def paid(self) -> bool:
@@ -89,6 +97,13 @@ class ImageModel(BaseModel):
             if value in prices:
                 return prices[value]
         return self.list_price_usd or None
+
+    def input_cost(self, photos: int) -> float:
+        """What sending `photos` product photos with one request is expected to cost, from the
+        catalogue's input token price: 0 for a free model or for none."""
+        if not self.paid or photos <= 0:
+            return 0.0
+        return photos * INPUT_TOKENS_PER_PHOTO * self.input_token_price_usd
 
 
 def load_catalogue(path: Path = CATALOGUE_PATH) -> list[ImageModel]:

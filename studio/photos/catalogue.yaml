@@ -9,7 +9,11 @@
 # price_basis (free_allowance, usage or list_price), list_price_usd (a photo, at the preset),
 # output_token_price_usd (a token, for usage-priced models), options (the preset),
 # option_choices (what Settings may change the preset to), option_prices (the list price for
-# each choice of an option that changes it), max_parallel (photos asked for at once) and checked.
+# each choice of an option that changes it), max_parallel (photos asked for at once), checked,
+# and (v6 Part B) max_input_images (how many product photos the model takes with the prompt;
+# 0 means words only) and input_token_price_usd (an input token, for the product photos sent).
+# The input token prices are the providers' published input prices as known on 2026-10-08;
+# the first paid product round confirms them against the usage each provider reports.
 
 models:
   - id: "@cf/black-forest-labs/flux-2-klein-4b"
@@ -19,6 +23,8 @@ models:
     # Every photo of a round at once, as v5 asked for them.
     max_parallel: 6
     checked: "2026-10-08"
+    # Words only until its image fields are confirmed (spec v6, B1 assumption 3).
+    max_input_images: 0
 
   - id: gpt-image-2.5-flare
     provider: openai
@@ -29,6 +35,8 @@ models:
     options: {quality: high}
     option_choices: {quality: [low, medium, high]}
     checked: "2026-10-08"
+    max_input_images: 3             # through the edits endpoint, one image[] each
+    input_token_price_usd: 0.00001  # $10 per million input image tokens
 
   - id: gpt-image-2.5-sunburst
     provider: openai
@@ -39,6 +47,8 @@ models:
     options: {quality: high}
     option_choices: {quality: [low, medium, high]}
     checked: "2026-10-08"
+    max_input_images: 3
+    input_token_price_usd: 0.00001
 
   - id: gpt-image-2
     provider: openai
@@ -49,6 +59,8 @@ models:
     options: {quality: high}
     option_choices: {quality: [low, medium, high]}
     checked: "2026-10-08"
+    max_input_images: 3
+    input_token_price_usd: 0.00001
 
   - id: gpt-image-1-mini
     provider: openai
@@ -58,6 +70,8 @@ models:
     options: {quality: medium, size: 1024x1536}
     option_choices: {quality: [low, medium, high]}
     checked: ""                     # lower than the others; check before enabling
+    max_input_images: 3
+    input_token_price_usd: 0.0000025
 
   - id: gemini-nano-banana-2.1
     provider: google
@@ -68,6 +82,8 @@ models:
     option_choices: {image_size: [1K, 2K]}
     option_prices: {image_size: {1K: 0.0336, 2K: 0.0504}}
     checked: "2026-10-08"
+    max_input_images: 3             # each as an inlineData part before the text
+    input_token_price_usd: 0.0000005
 
   - id: gemini-3.1-flash-image
     provider: google
@@ -76,6 +92,8 @@ models:
     list_price_usd: 0.067
     options: {image_size: 1K}
     checked: "2026-10-08"
+    max_input_images: 3
+    input_token_price_usd: 0.0000005
 
   - id: gemini-3.1-flash-lite-image
     provider: google
@@ -83,6 +101,8 @@ models:
     price_basis: list_price
     options: {image_size: 1K}
     checked: ""                     # check before enabling
+    max_input_images: 3
+    input_token_price_usd: 0.0000005
 
   - id: gemini-3-pro-image
     provider: google
@@ -91,3 +111,5 @@ models:
     list_price_usd: 0.134
     options: {image_size: 1K}
     checked: "2026-10-08"
+    max_input_images: 3
+    input_token_price_usd: 0.000002

@@ -224,10 +224,18 @@ class Store:
                     image_path TEXT,
                     note TEXT,
                     card TEXT,
-                    created_at TEXT
+                    created_at TEXT,
+                    role TEXT,
+                    rights_confirmed_at TEXT
                 )
                 """
             )
+            # v6 Part B: a reference's role and the moment its rights were confirmed, added in
+            # place to a table made before them.
+            present = {row[1] for row in conn.execute("PRAGMA table_info(session_references)")}
+            for column in ("role", "rights_confirmed_at"):
+                if column not in present:
+                    conn.execute(f"ALTER TABLE session_references ADD COLUMN {column} TEXT")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -956,7 +964,7 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 f"INSERT OR REPLACE INTO session_references ({_REFERENCE_COLUMNS}) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     reference.id,
                     reference.session_id,
@@ -965,6 +973,8 @@ class Store:
                     reference.note,
                     _card_json(reference.card),
                     _timestamp(reference.created_at),
+                    reference.role,
+                    _optional_timestamp(reference.rights_confirmed_at),
                 ),
             )
 
@@ -979,11 +989,19 @@ class Store:
         return [_reference_from_row(row) for row in rows]
 
     def update_session_reference(self, reference: SessionReference) -> None:
-        """Save a reference's note and card; its other fields never change."""
+        """Save a reference's note, card, role and rights confirmation (v6 Part B); its other
+        fields never change."""
         with self._connect() as conn:
             conn.execute(
-                "UPDATE session_references SET note = ?, card = ? WHERE id = ?",
-                (reference.note, _card_json(reference.card), reference.id),
+                "UPDATE session_references SET note = ?, card = ?, role = ?, "
+                "rights_confirmed_at = ? WHERE id = ?",
+                (
+                    reference.note,
+                    _card_json(reference.card),
+                    reference.role,
+                    _optional_timestamp(reference.rights_confirmed_at),
+                    reference.id,
+                ),
             )
 
     def delete_session_reference(self, reference_id: str) -> None:
@@ -1020,12 +1038,19 @@ def _provider_clause(provider: str | None) -> tuple[str, tuple[str, ...]]:
 
 # The v5 tables' columns, in the order their rows are written and read.
 _UPLOAD_COLUMNS = "id, brand_id, image_path, name, width, height, source, created_at"
-_REFERENCE_COLUMNS = "id, session_id, upload_id, image_path, note, card, created_at"
+_REFERENCE_COLUMNS = (
+    "id, session_id, upload_id, image_path, note, card, created_at, role, rights_confirmed_at"
+)
 
 
 def _timestamp(moment: datetime) -> str:
     """A moment as the v5 tables keep it: ISO 8601 with microseconds, so the text sorts in time."""
     return moment.isoformat(timespec="microseconds")
+
+
+def _optional_timestamp(moment: datetime | None) -> str | None:
+    """A moment as `_timestamp` keeps it, or None for none."""
+    return _timestamp(moment) if moment is not None else None
 
 
 def _card_json(card: StyleCard | None) -> str | None:
@@ -1050,7 +1075,9 @@ def _upload_from_row(row: tuple) -> Upload:
 
 def _reference_from_row(row: tuple) -> SessionReference:
     """A session_references row, in `_REFERENCE_COLUMNS` order, as a SessionReference."""
-    reference_id, session_id, upload_id, image_path, note, card, created_at = row
+    (
+        reference_id, session_id, upload_id, image_path, note, card, created_at, role, rights_at,
+    ) = row
     return SessionReference(
         id=reference_id,
         session_id=session_id,
@@ -1058,5 +1085,8 @@ def _reference_from_row(row: tuple) -> SessionReference:
         image_path=image_path,
         note=note or "",
         card=StyleCard.model_validate_json(card) if card else None,
+        # A row from before v6 Part B has neither: a style reference, never confirmed.
+        role="product" if role == "product" else "style",
+        rights_confirmed_at=datetime.fromisoformat(rights_at) if rights_at else None,
         created_at=datetime.fromisoformat(created_at),
     )

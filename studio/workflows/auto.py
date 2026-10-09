@@ -67,6 +67,7 @@ from studio.workflows.shared import (
     quality_bar_parts,
     run_workflow,
     saved_post,
+    session_products,
     settle,
     text_message,
     update_session,
@@ -112,6 +113,12 @@ REVISING_PROMPT = "Round {round} of {rounds}: revising the prompt…"
 PHOTOS_FAILED = "Stopped: {error} Composing with the best photo so far."
 # v6: a paid model that failed or reached a limit hands the rest of the session to a free one.
 FINISHING_ON_FREE = "Round {round}: {model} stopped ({reason}); finishing on {fallback}."
+# v6 Part B: never with product photos when the free model is words only, since it would
+# invent the product.
+NOT_FINISHING_ON_WORDS = (
+    "Round {round}: {model} stopped ({reason}); not finishing on {fallback}, which cannot see "
+    "product photos and would invent the product."
+)
 NOT_JUDGED = "Round {round}: the critic could not judge this round, so it was composed as it is."
 GOOD_ENOUGH = "Round {round}: top {top} of 5, good enough, composing."
 ROUNDS_LIMIT = "Round {round}: top {top} of 5, rounds limit reached, composing."
@@ -569,6 +576,8 @@ def _scored(sample: Sample) -> dict[str, Any]:
         "flags": list(review.flags),
         "verdict": review.verdict,
         "suggested_change": review.suggested_change,
+        # v6 Part B: how true the product stayed, when the round had product photos.
+        "product_fidelity": review.product_fidelity,
     }
 
 
@@ -697,7 +706,11 @@ def _finish_on_free(
     """When the round's model is paid and a photo of it failed or met a daily limit, make the
     rest of the session use the free default and say so in a decision line; True when it did
     (v6). Only with the photo settings' fallback on, and only for a failure making photos: a
-    stage that failed after its photos were made keeps its model. Never a paid model."""
+    stage that failed after its photos were made keeps its model. Never a paid model.
+
+    v6 Part B: never a words-only model for a session with product photos, since its photos
+    would invent the product; the decision line says so, and the session goes on as it would
+    with the fallback off."""
     registry = deps.photos
     if not registry.photo_settings().auto_fallback_to_default:
         return False
@@ -716,6 +729,12 @@ def _finish_on_free(
         return False
     fallback = registry.fallback_model()
     if not used.paid or fallback is None or fallback.id == used.id:
+        return False
+    if not registry.takes_photos(fallback) and session_products(deps.store, session.id):
+        line = NOT_FINISHING_ON_WORDS.format(
+            round=round_number, model=used.label, reason=_sentence(reason), fallback=fallback.label
+        )
+        _record(deps.store, session, line)
         return False
     update_session(deps.store, session, photo_model_id=fallback.id)
     line = FINISHING_ON_FREE.format(
