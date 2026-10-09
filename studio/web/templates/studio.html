@@ -90,7 +90,7 @@
           <label for="photo_model_id">Photo model</label>
           <select id="photo_model_id" name="photo_model_id" data-auto-model>
             {% for choice in photo_models %}
-            <option value="{{ choice.id }}" data-takes-photos="{{ 'true' if choice.takes_photos else 'false' }}" {{ "selected" if choice.id == default_photo_model_id else "" }}>{{ choice.label }}</option>
+            <option value="{{ choice.id }}" data-takes-photos="{{ 'true' if choice.takes_photos else 'false' }}" data-paid="{{ 'true' if choice.paid else 'false' }}" {{ "selected" if choice.id == default_photo_model_id else "" }}>{{ choice.label }}</option>
             {% endfor %}
           </select>
           {% if no_photo_model_for_products is defined %}<p class="hint" data-no-photo-model hidden>{{ no_photo_model_for_products }}</p>{% endif %}

@@ -53,13 +53,20 @@ KEY_CHECK_FAILED = "{provider} could not check the key ({status})."
 # What a free key check says when it worked.
 KEY_WORKS = "The key works. {count} image models are visible."
 KEY_WORKS_ONE = "The key works. 1 image model is visible."
-DEMO_KEY_CHECK = "Demo mode: no image model is called, and keys are not used."
+# Demo mode's line for photos: the stand-in's key check, and the Settings page's banner.
+DEMO_NO_IMAGE_CALLS = "Demo mode: no image model is called, and keys are not used."
 
 # v6 Part B: what the designer reads when the product photos did not all reach the model
 # (spec v6, B7), and the sentence code puts before the prompt by the session's fidelity (B3).
 PRODUCT_DECLINED = "The model declined the product photo."
 PRODUCT_UNREADABLE = "Product photo {number} could not be read and was left out."
 WORDS_ONLY = "This model cannot see product photos; the photo was made from the words alone."
+# No usable model can see product photos: on the Studio page, and for a round whose model left.
+NO_PHOTO_MODEL_FOR_PRODUCTS = (
+    "No model that takes product photos is set up. Add an OpenAI or Google key in Settings."
+)
+# An auto session with product photos asked for a words-only model (B1 assumption 6).
+WORDS_ONLY_WITH_PRODUCTS = "{label} cannot see product photos. Choose a model that takes photos."
 TOO_MANY_PRODUCTS = "{label} takes {photos}; the first {count} were sent."
 TOO_MANY_PRODUCTS_ONE = "{label} takes 1 product photo; the first was sent."
 FIDELITY_EXACT = (
@@ -79,6 +86,10 @@ class PhotoUnavailable(Exception):
 
 class LimitReached(PhotoUnavailable):
     """A daily limit stops a paid photo before it is asked for; the message names the limit."""
+
+
+class PhotoTimedOut(PhotoUnavailable):
+    """The provider did not answer in time. It may still make, and bill, the photo."""
 
 
 class PhotoResult(BaseModel):

@@ -723,14 +723,16 @@ def _finish_on_free(
         reason = next((sample.error for sample in samples if sample.error), None)
     if not reason:
         return False
+    has_products = bool(session_products(deps.store, session.id))
     try:
-        used = registry.resolve(session.photo_model_id).model
+        # The model the round used, resolved as the round resolved it.
+        used = registry.resolve(session.photo_model_id, products=has_products).model
     except PhotoUnavailable:
         return False
     fallback = registry.fallback_model()
     if not used.paid or fallback is None or fallback.id == used.id:
         return False
-    if not registry.takes_photos(fallback) and session_products(deps.store, session.id):
+    if not registry.takes_photos(fallback) and has_products:
         line = NOT_FINISHING_ON_WORDS.format(
             round=round_number, model=used.label, reason=_sentence(reason), fallback=fallback.label
         )

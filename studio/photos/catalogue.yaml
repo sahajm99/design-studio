@@ -3,7 +3,9 @@
 #
 # Prices are list prices, checked on the date in `checked`. The studio records the actual cost
 # where the provider reports usage, and the list price otherwise. An entry whose price was not
-# checked has `checked: ""` and no list price, and the studio says so instead of guessing.
+# checked has `checked: ""` and a cautious ceiling as its list price, so its photos count
+# against the spend limit; the studio says "price not checked" beside it, and offers it only
+# once it is ticked on the Settings page.
 #
 # Fields: id (the provider's own model id), provider (cloudflare, openai or google), label,
 # price_basis (free_allowance, usage or list_price), list_price_usd (a photo, at the preset),
@@ -66,6 +68,9 @@ models:
     provider: openai
     label: GPT Image 1 mini
     price_basis: usage
+    # Not checked: a cautious ceiling, so its photos count against the spend limit. It is
+    # offered only once it is ticked on the Settings page.
+    list_price_usd: 0.05
     # The GPT Image 1 models take only fixed sizes, so the portrait one is the preset.
     options: {quality: medium, size: 1024x1536}
     option_choices: {quality: [low, medium, high]}
@@ -99,6 +104,8 @@ models:
     provider: google
     label: Nano Banana 2 Lite
     price_basis: list_price
+    # Not checked: a cautious ceiling, as for GPT Image 1 mini, and offered only once ticked.
+    list_price_usd: 0.05
     options: {image_size: 1K}
     checked: ""                     # check before enabling
     max_input_images: 3

@@ -14,10 +14,13 @@ import pytest
 from PIL import Image
 
 from studio.config import Settings
-from studio.photos import get_photo_provider
+from studio.contracts import DEFAULT_PHOTO_MODEL_ID
 from studio.photos.base import PhotoUnavailable
+from studio.photos.catalogue import load_catalogue
 from studio.photos.cloudflare import CloudflarePhotoProvider
 from studio.photos.fake import FakePhotoProvider
+from studio.photos.registry import PhotoRegistry
+from studio.store import Store
 
 SECRET_TOKEN = "super-secret-token-value"
 SECRET_ACCOUNT = "super-secret-account-id"
@@ -284,29 +287,31 @@ async def test_cloudflare_messages_never_hold_the_token(tmp_path: Path) -> None:
     assert SECRET_TOKEN not in str(exc_info.value)
 
 
-# --------------------------------------------------------------------- the factory
+# -------------------------------------------------------------------- the registry
 
 
-def test_factory_follows_photo_mode(settings: Settings) -> None:
+def test_registry_follows_photo_mode(settings: Settings, store: Store) -> None:
+    """The registry's adapter for the free model follows the photo mode, as v5's factory did:
+    Cloudflare with its keys, the stand-in for the tests' override, and no model for "none"."""
+    flux = DEFAULT_PHOTO_MODEL_ID
     cloudflare_settings = settings.model_copy(
         update={
             "photo_provider": "cloudflare",
             "cloudflare_account_id": "acct123",
             "cloudflare_api_token": "token123",
-            "cloudflare_image_model": "@cf/black-forest-labs/flux-2-klein-4b",
         }
     )
-    provider = get_photo_provider(cloudflare_settings)
+    provider = PhotoRegistry(load_catalogue(), cloudflare_settings, store).adapter_for(flux)
     assert isinstance(provider, CloudflarePhotoProvider)
     assert provider.name == "cloudflare"
     assert provider.account_id == "acct123"
     assert provider.api_token == "token123"
-    assert provider.model == "@cf/black-forest-labs/flux-2-klein-4b"
+    assert provider.model == flux
 
     fake_settings = settings.model_copy(update={"photo_provider": "fake"})
-    provider = get_photo_provider(fake_settings)
+    provider = PhotoRegistry(load_catalogue(), fake_settings, store).adapter_for(flux)
     assert isinstance(provider, FakePhotoProvider)
     assert provider.name == "fake"
 
     none_settings = settings.model_copy(update={"photo_provider": "none"})
-    assert get_photo_provider(none_settings) is None
+    assert PhotoRegistry(load_catalogue(), none_settings, store).usable_models() == []

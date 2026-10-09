@@ -22,6 +22,11 @@ def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def midnight_utc() -> datetime:
+    """The start of today, a UTC day: what "today" means for the photo counts and limits."""
+    return now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 # ---------------------------------------------------------------- brand kit
 
 Mode = Literal["dark", "light"]
@@ -508,7 +513,8 @@ CriticFlag = Literal[
     # v6 Part B: the product in the photo is not the one in the product photo.
     "product_changed",
 ]
-# A sample with one of these is never the recommended pick, and auto mode never ships one.
+# A sample with one of these is never the recommended pick, and never good enough for auto
+# mode to stop on; auto mode composes one only when no round made a photo without one.
 HARD_FLAGS: tuple[str, ...] = (
     "text_in_image",
     "logo_in_image",

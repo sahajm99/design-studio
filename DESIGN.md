@@ -114,8 +114,8 @@ page introducing the eight agents is the next page to be built on it.
 
 Each service sits behind a small interface with a fake beside it, chosen from the environment:
 demo mode when no keys are set, otherwise the real provider. Critics run three at a time, renders
-too. Keys come only from the environment. Errors are logged by type, never by text, so a request
-address never leaks into a log.
+too. Keys come from the Settings page, saved encrypted, or from the environment (`.env`); a saved
+key wins. Errors are logged by type, never by text, so a request address never leaks into a log.
 
 ## 6. Failure and fallbacks
 
@@ -285,7 +285,8 @@ then tested by hand with real models. A fifth version followed the demo call on 
 designer's own images as references and in the editor, and the editor's Ask mode, from the spec
 `docs/superpowers/specs/2026-10-08-design-studio-v5-design.md`, built the same way in three
 tasks with a review, a fix round and a re-review each, then one review of the whole and its fix
-wave. The rulings taken while building are listed at the end of each spec, under "As built".
+wave. The rulings taken while building are listed at the end of each spec, under "As built";
+v6's were kept in its build ledger, and its spec's "As built" section copies them out.
 A sixth version the same evening, from the spec `2026-10-08-design-studio-v6-design.md`:
 paid image models on the designer's own keys behind a registry, a Settings page with encrypted
 keys, a model on every round, comparison rounds, costs and limits, request guards, and product

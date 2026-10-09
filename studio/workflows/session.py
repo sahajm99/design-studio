@@ -49,6 +49,7 @@ from studio.photos.base import (
     WORDS_ONLY,
     LimitReached,
     PhotoProvider,
+    PhotoTimedOut,
     PhotoUnavailable,
     fidelity_sentence,
     too_many_products,
@@ -486,7 +487,11 @@ def pick_source_photo(
 
 
 def _samples_workflow(
-    deps: Deps, run: Run, session: StudioSession, count: int | None, compare: list[str] | None = None
+    deps: Deps,
+    run: Run,
+    session: StudioSession,
+    count: int | None,
+    compare: list[str] | None = None,
 ) -> Workflow:
     """load_prompt → generate_samples → review_samples → rank_samples → save_round."""
     store, kit = deps.store, deps.kit
@@ -614,7 +619,9 @@ async def _make_samples(
         chosen = [registry.resolve(model_id) for model_id in compare]
         models = [resolved.model for resolved in chosen]
     else:
-        chosen = [registry.resolve(session.photo_model_id)]
+        # A session with product photos never loses its model to a words-only one (Part B).
+        has_products = bool(session_products(deps.store, session.id))
+        chosen = [registry.resolve(session.photo_model_id, products=has_products)]
         wanted = count if count is not None else session.sample_count
         models = [chosen[0].model] * max(1, min(wanted, deps.settings.max_samples))
     count = len(models)
@@ -755,6 +762,9 @@ async def _ask_for_photo(
     except LimitReached as error:
         sample.error = str(error)
         return None
+    # Until the provider answers, a stop or a timeout leaves a photo it may still bill: the
+    # registry then keeps counting it toward today's photo limit.
+    answered = False
     try:
         result = await adapter.generate(
             prompt,
@@ -767,17 +777,20 @@ async def _ask_for_photo(
             images=[path for _, path in products],
         )
     except PhotoUnavailable as error:
+        answered = not isinstance(error, PhotoTimedOut)
         # Written for the designer, and every known key is taken out before it is kept.
         message = registry.redact(str(error)).strip()
         logger.warning("Photo %s-%s failed: %s", sample.round, sample.index, message)
         sample.error = message or PHOTO_SERVICE_FAILED
         return None
     except Exception as error:
+        answered = True
         # Only the type: the text of an unexpected error may hold a request address.
         logger.warning("The photo provider failed with %s", type(error).__name__)
         sample.error = PHOTO_SERVICE_FAILED
         return None
     else:
+        answered = True
         photo = Path(result.path)
         sample.image_path = deps.store.relative(photo)
         sample.provider = result.provider
@@ -787,7 +800,7 @@ async def _ask_for_photo(
         sample.product_reference_ids = [ref_id for ref_id, _ in products][: result.input_images]
         return photo
     finally:
-        registry.record(sample)
+        registry.record(sample, abandoned=not answered)
 
 
 def _made(samples: list[Sample]) -> int:

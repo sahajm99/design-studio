@@ -11,7 +11,6 @@ import difflib
 import io
 import logging
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
@@ -63,6 +62,7 @@ from studio.contracts import (
     TextAlign,
     TextPosition,
     Upload,
+    midnight_utc,
     new_id,
     now,
 )
@@ -78,7 +78,14 @@ from studio.library.sources import (
 )
 from studio.library.taste import build_taste_profile
 from studio.media import agent_copy_path, agent_picture, product_copy_path
-from studio.photos.base import KEY_REFUSED, PROVIDER_LABELS
+from studio.photos.base import (
+    DEMO_NO_IMAGE_CALLS,
+    KEY_REFUSED,
+    NO_PHOTO_MODEL_FOR_PRODUCTS,
+    PROVIDER_LABELS,
+    WORDS_ONLY_WITH_PRODUCTS,
+    PhotoUnavailable,
+)
 from studio.photos.catalogue import ImageModel
 from studio.photos.registry import MODEL_GONE, NO_PHOTO_MODEL, PhotoRegistry
 from studio.render import (
@@ -165,7 +172,6 @@ _GOOGLE_BILLING_NOTE = (
     "Google's image models need billing on the Google project behind this key. "
     "Use a project of its own, so the studio's free text key stays free."
 )
-SETTINGS_DEMO_BANNER = "Demo mode: no image model is called, and keys are not used."
 _USAGE_NOTE = (
     "Estimates from list prices and the usage each provider reports. "
     "Your provider's billing page is the record."
@@ -187,6 +193,10 @@ _MAX_SPEND_LIMIT = 10_000.0
 GENERATE_FREE = "Generate {count}"
 GENERATE_PAID = "Generate {count} · about ${total:.2f}"
 GENERATE_NOT_CHECKED = "Generate {count} · price not checked"
+# "Generate again" makes the session's sample count on the picker's model: the same estimate.
+GENERATE_AGAIN_FREE = "Generate again"
+GENERATE_AGAIN_PAID = "Generate again · about ${total:.2f}"
+GENERATE_AGAIN_NOT_CHECKED = "Generate again · price not checked"
 COMPARE_IDLE = "Compare models"
 COMPARE_FREE = "Compare {count} models"
 COMPARE_PAID = "Compare {count} models · about ${total:.2f}"
@@ -218,9 +228,18 @@ CANNOT_SEE_PRODUCTS = "{label} · cannot see product photos"
 WITH_PRODUCT_PHOTOS = "With {photos}"
 FIDELITY_SCORE = "Product fidelity {score} of 5"
 FIDELITY_NOT_SCORED = "Product fidelity not scored"
-NO_PHOTO_MODEL_FOR_PRODUCTS = (
-    "No model that takes product photos is set up. Add an OpenAI or Google key in Settings."
+# The rest of B6's texts on the session page: a reference's role, the flag on a card, the
+# picker of the brand's uploads, and why a fourth product photo cannot be marked.
+ROLE_PRODUCT = "Product"
+PRODUCT_CHANGED = "Product changed"
+FROM_YOUR_UPLOADS = "From your uploads"
+PRODUCTS_FULL = "A session takes three product photos."
+COMPARE_HINT = (
+    "Choose two or three. Each makes one photo from this prompt, and the critic ranks them "
+    "together."
 )
+# The archive's Model filter: every model.
+ALL_MODELS = "All"
 
 STEP_LABELS: dict[str, str] = {
     "load_context": "Gather context",
@@ -502,10 +521,6 @@ def _session_busy(store: Store, session: StudioSession) -> bool:
     return run is not None and run.status == "running"
 
 
-def _midnight_utc() -> datetime:
-    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-
-
 def _clamp_sample_count(raw: int, max_samples: int) -> int:
     return max(1, min(max_samples, raw))
 
@@ -532,24 +547,52 @@ def _model_label(registry: PhotoRegistry, model_id: str) -> str:
 
 
 def _model_choices(registry: PhotoRegistry, products: int = 0) -> list[dict[str, Any]]:
-    """What a model picker offers: the usable models, each with its price beside its name, and
-    whether it takes product photos (v6 Part B). With `products`, the session's product photos,
-    a words-only model's label adds "cannot see product photos"."""
+    """What a model picker offers: the usable models, each with its price beside its name,
+    whether it takes product photos (v6 Part B) and whether it is paid. With `products`, the
+    session's product photos, a words-only model's label adds "cannot see product photos"."""
     choices: list[dict[str, Any]] = []
     for model in registry.usable_models():
         label = registry.price_label(model)
         takes_photos = registry.takes_photos(model)
         if products and not takes_photos:
             label = CANNOT_SEE_PRODUCTS.format(label=label)
-        choices.append({"id": model.id, "label": label, "takes_photos": takes_photos})
+        choices.append(
+            {"id": model.id, "label": label, "takes_photos": takes_photos, "paid": model.paid}
+        )
     return choices
 
 
-def _session_model(registry: PhotoRegistry, session: StudioSession) -> ImageModel | None:
+def _first_usable(registry: PhotoRegistry) -> ImageModel | None:
+    """The first model that can be used now, in the catalogue's order; None when there is none."""
+    return next(iter(registry.usable_models()), None)
+
+
+def _session_model(
+    registry: PhotoRegistry, session: StudioSession, products: int = 0
+) -> ImageModel | None:
     """The model the session's next round uses, as its picker shows it: the session's own while
-    it can be used, else the studio's default; None when no model can be used."""
-    own = next((m for m in registry.usable_models() if m.id == session.photo_model_id), None)
-    return own or registry.default_model()
+    it can be used, else what the round uses instead (the default; with product photos, a model
+    that can see them). When no free model can be used, the first usable model, so a paid model
+    is never selected without its price. None when no model can be used."""
+    try:
+        return registry.resolve(session.photo_model_id, products=bool(products)).model
+    except PhotoUnavailable:
+        return _first_usable(registry)
+
+
+def _words_only_refusal(registry: PhotoRegistry, model_id: str) -> str:
+    """Why an auto session with product photos cannot start on `model_id` (v6 Part B): the model
+    it would run on cannot see them, so its photos would invent the product. "" when it can, or
+    when no model can be used at all (the round says so)."""
+    try:
+        model: ImageModel | None = registry.resolve(model_id, products=True).model
+    except PhotoUnavailable:
+        model = _first_usable(registry)
+    if model is None or registry.takes_photos(model):
+        return ""
+    if not any(registry.takes_photos(other) for other in registry.usable_models()):
+        return NO_PHOTO_MODEL_FOR_PRODUCTS
+    return WORDS_ONLY_WITH_PRODUCTS.format(label=model.label)
 
 
 def _photos_cost(
@@ -574,12 +617,35 @@ def _generate_label(
 ) -> str:
     """The Generate button's words: "Generate 3 · about $0.15", or "Generate 3" on a free model;
     with product photos, their input cost included ("Generate 3 · about $0.18")."""
+    texts = (GENERATE_FREE, GENERATE_PAID, GENERATE_NOT_CHECKED)
+    return _estimate_label(registry, model, count, products, texts)
+
+
+def _again_label(
+    registry: PhotoRegistry, model: ImageModel | None, count: int, products: int = 0
+) -> str:
+    """"Generate again"'s words, with the same estimate as Generate's for its `count` photos:
+    "Generate again · about $0.15", or "Generate again" on a free model."""
+    texts = (GENERATE_AGAIN_FREE, GENERATE_AGAIN_PAID, GENERATE_AGAIN_NOT_CHECKED)
+    return _estimate_label(registry, model, count, products, texts)
+
+
+def _estimate_label(
+    registry: PhotoRegistry,
+    model: ImageModel | None,
+    count: int,
+    products: int,
+    texts: tuple[str, str, str],
+) -> str:
+    """A round button's words from its texts (free, paid, price not checked) for `count`
+    photos from `model`, with `products` product photos' input cost in the estimate."""
+    free, paid, not_checked = texts
     if model is None or not model.paid:
-        return GENERATE_FREE.format(count=count)
+        return free.format(count=count)
     total = _photos_cost(registry, [model] * count, products)
     if total is None:
-        return GENERATE_NOT_CHECKED.format(count=count)
-    return GENERATE_PAID.format(count=count, total=total)
+        return not_checked.format(count=count)
+    return paid.format(count=count, total=total)
 
 
 def _compare_label(registry: PhotoRegistry, models: list[ImageModel], products: int = 0) -> str:
@@ -632,7 +698,8 @@ def _round_lines(
         model_ids = list(dict.fromkeys(sample.model_id for sample in samples if sample.model_id))
         if len(model_ids) > 1:
             labels = ", ".join(_model_label(registry, model_id) for model_id in model_ids)
-            lines[group["round"]] = COMPARED.format(models=labels, cost=registry.round_cost(samples))
+            cost = registry.round_cost(samples)
+            lines[group["round"]] = COMPARED.format(models=labels, cost=cost)
         elif (
             position == 0
             and model_ids
@@ -726,7 +793,6 @@ def _model_rows(
 ) -> list[dict[str, Any]]:
     """A provider card's models: each offered or not, its price, its preset's choices and
     whether it is the default. Only a model that can make photos now may be the default."""
-    enabled = set(photo_settings.enabled_model_ids)
     has_key = registry.has_key(provider)  # type: ignore[arg-type]
     rows = []
     for model in registry.catalogue:
@@ -738,7 +804,7 @@ def _model_rows(
                 "id": model.id,
                 "label": model.label,
                 "price": registry.price_label(model).removeprefix(f"{model.label} · "),
-                "offered": not enabled or model.id in enabled,
+                "offered": registry.offered(model, photo_settings),
                 "is_default": model.id == default_id,
                 "can_default": has_key or (registry.stand_in and not model.paid),
                 "choices": [
@@ -759,7 +825,7 @@ def _usage_rows(deps: Deps) -> list[dict[str, Any]]:
     """The Usage part: photos and estimated spend for each provider, today and this calendar
     month (UTC days). The stand-in has a row in demo mode, or once it made a photo this month."""
     store = deps.store
-    today = _midnight_utc()
+    today = midnight_utc()
     month = today.replace(day=1)
     providers = list(_KEY_PROVIDERS)
     if deps.photos.stand_in or store.count_photos_since(month, "fake"):
@@ -816,7 +882,8 @@ def _settings_context(
         )
     limits = photo_settings.daily_photo_limit
     return {
-        "demo_banner": SETTINGS_DEMO_BANNER,
+        # Only while the stand-in makes the photos: Cloudflare's keys make real ones (v5's rule).
+        "demo_banner": DEMO_NO_IMAGE_CALLS if registry.stand_in else "",
         "provider_cards": cards,
         "keys_unreadable": KEYS_UNREADABLE if registry.keys_unreadable else "",
         "keys_error": NO_SECRET if error == "no_secret" else "",
@@ -1022,13 +1089,15 @@ def _child_rows(store: Store, run_id: str) -> list[dict[str, Any]]:
 
 def _studio_context(deps: Deps, *, error: str | None = None, brief_value: str = "") -> dict[str, Any]:
     registry = deps.photos
-    default = registry.default_model()
+    # The model auto mode starts on: the default, or the first usable model when no free one
+    # can be used, so the picker never selects a paid model without its price beside it.
+    default = registry.default_model() or _first_usable(registry)
     return {
         "posts": deps.store.list_posts(),
         "sessions": deps.store.list_sessions(),
-        "photos_today": deps.store.count_photos_since(_midnight_utc()),
+        "photos_today": deps.store.count_photos_since(midnight_utc()),
         # v6: what today's photos cost, across every provider.
-        "spent_today": SPENT.format(spent=deps.store.spend_since(_midnight_utc())),
+        "spent_today": SPENT.format(spent=deps.store.spend_since(midnight_utc())),
         # v6: auto mode's "Photo model", the default chosen, and the most the session can cost.
         "photo_models": _model_choices(registry),
         "default_photo_model_id": default.id if default is not None else "",
@@ -1647,27 +1716,33 @@ def _session_context(
     auto_state = session.auto_state
     rounds = _round_groups(store, session.id)
     registry = deps.photos
-    session_model = _session_model(registry, session)
     failed_run = _failed_run_context(store, session, rounds)
     references = designer_references(store, session.id)
     # v6 Part B: the product photos the image model receives with the prompt, three at most.
     products = len(product_references(references))
+    session_model = _session_model(registry, session, products)
     referenced = {reference.upload_id for reference in references}
     return {
         "session": session,
-        # v6: the Model picker (the session's model chosen), the Generate button's estimate,
-        # the compare round's choices, and a line under a round where one is due.
+        # v6: the Model picker (the session's model chosen), the estimates of Generate and of
+        # "Generate again", the compare round's choices, and a line under a round where due.
         "photo_models": _model_choices(registry, products),
         "photo_model_selected": session_model.id if session_model is not None else "",
         "generate_label": _generate_label(
             registry, session_model, session.sample_count, products
         ),
+        "again_label": _again_label(registry, session_model, session.sample_count, products),
         "compare_label": COMPARE_IDLE,
+        "compare_hint": COMPARE_HINT,
         "round_lines": _round_lines(registry, session, rounds),
         # v6 Part B: the brief panel's product photos (the line, the fidelity choice, the rights
         # line, the brand's uploads to add from) and each card's product-photo lines.
         "product_count": products,
         "products_full": products >= MAX_PRODUCT_PHOTOS,
+        "products_full_line": PRODUCTS_FULL,
+        "role_product": ROLE_PRODUCT,
+        "product_changed_label": PRODUCT_CHANGED,
+        "from_your_uploads": FROM_YOUR_UPLOADS,
         "product_line": PRODUCT_LINE,
         "fidelity_choices": FIDELITY_CHOICES,
         "rights_line": RIGHTS_LINE,
@@ -1712,7 +1787,7 @@ def _session_context(
         "picked_layout": auto_state.picked_layout if auto_state else "",
         "quality_bar_url": _quality_bar_view(deps)["url"],
         "failed_run": failed_run,
-        "photos_today": store.count_photos_since(_midnight_utc()),
+        "photos_today": store.count_photos_since(midnight_utc()),
         "previous_version": previous,
         "diff_html": _word_diff_html(previous.photo_prompt, current.photo_prompt)
         if previous and current
@@ -1752,7 +1827,9 @@ def _archive_context(
     the model's badge (`photos`, the registry, names the models and their costs)."""
     made_by = list(
         dict.fromkeys(
-            sample.model_id for sample in store.list_archive() if sample.model_id and sample.image_path
+            sample.model_id
+            for sample in store.list_archive()
+            if sample.model_id and sample.image_path
         )
     )
     active_model = model if model in made_by else ""
@@ -1795,7 +1872,7 @@ def _archive_context(
         ],
         "active_model": active_model,
         "model_filters": [
-            {"id": "", "label": "All", "href": address(active_filter, "")},
+            {"id": "", "label": ALL_MODELS, "href": address(active_filter, "")},
             *(
                 {
                     "id": model_id,
@@ -2288,6 +2365,8 @@ async def create_session(
     session's photo model; without it, the session uses the studio's default.
     `references_are_products` (v6 Part B), the box whose label is the rights line, makes the
     reference images product photos, up to three, so the first run's agents already see them.
+    An auto session with product photos never runs on a words-only model, which would invent
+    the product: such a request is answered 422 with the reason, and nothing is started.
     """
     deps: Deps = request.app.state.deps
     stripped = brief.strip()
@@ -2298,6 +2377,17 @@ async def create_session(
             _studio_context(deps, error="Write a brief first.", brief_value=brief),
             status_code=400,
         )
+    has_files = any(upload.filename for upload in references or [])
+    if mode == "auto" and references_are_products and has_files:
+        chosen = _photo_model_choice(deps, photo_model_id) or ""
+        refusal = _words_only_refusal(deps.photos, chosen)
+        if refusal:
+            return _page(
+                request,
+                "studio.html",
+                _studio_context(deps, error=refusal, brief_value=brief),
+                status_code=422,
+            )
 
     field_absent = research is None and not research_choice
     wanted = mode == "auto" if field_absent else bool(research)
@@ -3334,7 +3424,9 @@ def _save_typed_keys(registry: PhotoRegistry, provider: str, typed: ProviderKeys
     keeps the saved key as it is. Raises SecretUnavailable without a secret."""
     saved = registry.saved_keys()
     update = {
-        field: getattr(typed, field) for field, _ in _KEY_PROVIDERS[provider] if getattr(typed, field)
+        field: getattr(typed, field)
+        for field, _ in _KEY_PROVIDERS[provider]
+        if getattr(typed, field)
     }
     registry.set_saved_keys(saved.model_copy(update=update))
 
@@ -3411,7 +3503,9 @@ async def test_provider_key(request: Request, provider: str) -> Response:
     refused = KEY_REFUSED.format(provider=PROVIDER_LABELS[provider])
     _key_checks(request)[provider] = {
         "ok": check.ok,
-        "message": f"{check.message} {_TYPED_KEY_NOT_SAVED}" if is_typed and not saved else check.message,
+        "message": (
+            f"{check.message} {_TYPED_KEY_NOT_SAVED}" if is_typed and not saved else check.message
+        ),
         # The pill says "Key refused" only for the key in use, not for one typed and not saved.
         "refused": not check.ok and not is_typed and check.message == refused,
     }
@@ -3430,9 +3524,15 @@ async def save_photo_models(request: Request) -> Response:
     form = await request.form()
     known = {model.id: model for model in registry.catalogue}
     current = registry.photo_settings()
-    offered = {value for value in form.getlist("offered") if isinstance(value, str) and value in known}
+    offered = {
+        value for value in form.getlist("offered") if isinstance(value, str) and value in known
+    }
     default_raw = form.get("default_model_id")
-    default = default_raw if isinstance(default_raw, str) and default_raw in known else current.default_model_id
+    default = (
+        default_raw
+        if isinstance(default_raw, str) and default_raw in known
+        else current.default_model_id
+    )
     offered.add(default)
     options: dict[str, dict[str, str]] = {}
     for key, value in form.multi_items():
@@ -3471,7 +3571,8 @@ async def save_photo_limits(
     registry = deps.photos
     current = registry.photo_settings()
     limits = dict(current.daily_photo_limit)
-    for provider, raw in (("openai", daily_photo_limit_openai), ("google", daily_photo_limit_google)):
+    typed_limits = (("openai", daily_photo_limit_openai), ("google", daily_photo_limit_google))
+    for provider, raw in typed_limits:
         number = _whole_number(raw)
         if number is not None:
             limits[provider] = max(0, min(number, _MAX_PHOTO_LIMIT))  # type: ignore[index]
@@ -3495,7 +3596,8 @@ async def photo_estimate(
     products: int = 0,
 ) -> JSONResponse:
     """The estimate texts, from the catalogue (v6): `button`, Generate's words for `count` photos
-    from `model` (the default when it is empty or cannot be used); `auto_line`, the line under
+    from `model` (the default when it is empty or cannot be used, else the first usable
+    model); `again_button`, "Generate again"'s words for the same; `auto_line`, the line under
     the auto limits for `count` photos; and `compare_button`, the compare button's words for
     the models in `compare`. `total_usd` is null when a price was not checked. `products` (v6
     Part B) is how many product photos go with each photo, whose input cost is included."""
@@ -3504,7 +3606,8 @@ async def photo_estimate(
     count = max(1, min(count, 50))
     products = max(0, min(products, MAX_PRODUCT_PHOTOS))
     usable = {m.id: m for m in registry.usable_models()}
-    chosen = usable.get(model) or registry.default_model()
+    # As the pages choose: the default, else the first usable model, never a paid one unpriced.
+    chosen = usable.get(model) or registry.default_model() or _first_usable(registry)
     compared = [usable[i] for i in dict.fromkeys(compare or []) if i in usable][:_MAX_COMPARE]
     total = _photos_cost(registry, [chosen] * count, products) if chosen is not None else 0.0
     return JSONResponse(
@@ -3513,6 +3616,7 @@ async def photo_estimate(
             "count": count,
             "total_usd": round(total, 4) if total is not None else None,
             "button": _generate_label(registry, chosen, count, products),
+            "again_button": _again_label(registry, chosen, count, products),
             "auto_line": _auto_line(registry, chosen, count, products),
             "compare_button": _compare_label(registry, compared, products),
         }

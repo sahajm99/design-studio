@@ -703,14 +703,16 @@ class Store:
     def count_photos_since(self, since: datetime, provider: str | None = None) -> int:
         """Count of samples with an image, including deleted ones, created at or after `since`.
 
-        Photos the designer uploaded are left out: the count is of photos made. With
-        `provider` ("openai"), only that provider's photos are counted (v6).
+        Only the photos a round made count (round 1 on): the designer's uploads and a photo
+        reused from the archive sit in round 0, and nothing made them now. With `provider`
+        ("openai"), only that provider's photos are counted (v6).
         """
         clause, params = _provider_clause(provider)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM samples "
-                "WHERE created_at >= ? AND json_extract(json, '$.image_path') IS NOT NULL "
+                "WHERE created_at >= ? AND round >= 1 "
+                "AND json_extract(json, '$.image_path') IS NOT NULL "
                 f"AND json_extract(json, '$.provider') != 'upload'{clause}",
                 (since.timestamp(), *params),
             ).fetchone()
@@ -718,13 +720,15 @@ class Store:
 
     def spend_since(self, since: datetime, provider: str | None = None) -> float:
         """What the photos made at or after `since` cost, in dollars, deleted ones included: the
-        money was spent. A photo whose cost is not known adds nothing. With `provider`
-        ("google"), only that provider's photos (v6)."""
+        money was spent. Only the photos a round made count (round 1 on), so a photo reused
+        from the archive is not paid for twice; a photo whose cost is not known adds nothing.
+        With `provider` ("google"), only that provider's photos (v6)."""
         clause, params = _provider_clause(provider)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT COALESCE(SUM(json_extract(json, '$.cost_usd')), 0) FROM samples "
-                "WHERE created_at >= ? AND json_extract(json, '$.image_path') IS NOT NULL "
+                "WHERE created_at >= ? AND round >= 1 "
+                "AND json_extract(json, '$.image_path') IS NOT NULL "
                 f"AND json_extract(json, '$.cost_usd') IS NOT NULL{clause}",
                 (since.timestamp(), *params),
             ).fetchone()

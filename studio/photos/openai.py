@@ -122,11 +122,13 @@ class OpenAIPhotoProvider:
                     _GENERATIONS_URL, json=body, headers=self._headers(), timeout=self.timeout
                 )
 
+            # No second try on a 5xx: a gateway error may come after the photo was billed.
             response = await send(
                 request,
                 provider=_LABEL,
                 timeout=self.timeout,
                 retry_rate_limit=_passing_rate_limit,
+                retry_server_error=False,
             )
         if not response.is_success:
             raise self._unavailable(_failure_message(response, model, with_images=bool(files)))

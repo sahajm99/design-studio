@@ -118,11 +118,13 @@ class GooglePhotoProvider:
         url = _GENERATE_URL.format(model=model.id)
 
         async with client_for(self.client) as client:
+            # No second try on a 5xx: a gateway error may come after the photo was billed.
             response = await send(
                 lambda: client.post(url, json=body, headers=self._headers(), timeout=self.timeout),
                 provider=_LABEL,
                 timeout=self.timeout,
                 retry_rate_limit=_passing_rate_limit,
+                retry_server_error=False,
             )
         if not response.is_success:
             raise self._unavailable(_failure_message(response, model, with_images=bool(sent)))

@@ -138,7 +138,7 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
 
     app = FastAPI(title="Design Studio", lifespan=lifespan)
     # v6: only this computer's names, and only the studio's own pages may change things.
-    app.add_middleware(LocalOnlyGuard, port=settings.port)
+    app.add_middleware(LocalOnlyGuard)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(router)
     return app

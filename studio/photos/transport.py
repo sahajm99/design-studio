@@ -2,9 +2,11 @@
 failure allows, and a provider's error answer read into plain parts.
 
 The rules, for every provider: a rate limit (429) gets one wait, as long as the answer asks
-and at most 20 seconds, and one more try; a server error (5xx) gets one more try at once; a
-timeout or a network error fails the photo with a plain message. Keys travel in headers only,
-so no address or message built here ever holds one.
+and at most 20 seconds, and one more try; a server error (5xx) gets one more try at once,
+except on a paid photo, where a gateway's 502 or 504 may come after the photo was made and
+billed, so a second request could be billed again; a timeout or a network error fails the
+photo with a plain message. Keys travel in headers only, so no address or message built here
+ever holds one.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from typing import Any
 
 import httpx
 
-from studio.photos.base import NO_ANSWER_IN_TIME, UNREACHABLE, PhotoUnavailable
+from studio.photos.base import NO_ANSWER_IN_TIME, UNREACHABLE, PhotoTimedOut, PhotoUnavailable
 
 MAX_RATE_LIMIT_WAIT = 20.0  # seconds
 DEFAULT_RATE_LIMIT_WAIT = 5.0  # seconds, when the answer does not say
@@ -63,15 +65,17 @@ async def send(
     provider: str,
     timeout: float,
     retry_rate_limit: Callable[[httpx.Response], bool],
+    retry_server_error: bool = True,
 ) -> httpx.Response:
     """The provider's answer to `request`, after the one retry its failure allows: a 429 that
     `retry_rate_limit` says is a passing rate limit (not used-up credit) waits once and tries
-    again; a 5xx tries again at once. Raises PhotoUnavailable on a timeout or a network error."""
+    again; a 5xx tries again at once, unless `retry_server_error` is off, as it is for a paid
+    photo. Raises PhotoTimedOut on a timeout and PhotoUnavailable on a network error."""
     response = await _once(request, provider, timeout)
     if response.status_code == 429 and retry_rate_limit(response):
         await sleep(rate_limit_wait(response))
         response = await _once(request, provider, timeout)
-    elif response.status_code >= 500:
+    elif response.status_code >= 500 and retry_server_error:
         response = await _once(request, provider, timeout)
     return response
 
@@ -83,7 +87,7 @@ async def _once(
         return await request()
     except httpx.TimeoutException as error:
         message = NO_ANSWER_IN_TIME.format(provider=provider, seconds=f"{timeout:.0f}")
-        raise PhotoUnavailable(message) from error
+        raise PhotoTimedOut(message) from error
     except httpx.RequestError as error:
         raise PhotoUnavailable(UNREACHABLE.format(provider=provider)) from error
 

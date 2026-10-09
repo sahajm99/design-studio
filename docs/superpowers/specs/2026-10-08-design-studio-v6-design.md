@@ -1,6 +1,6 @@
 # Design Studio v6: image models, your own keys and product photos
 
-Date: 2026-10-08. Status: draft for review. Builds on v5 (`2026-10-08-design-studio-v5-design.md`, as committed at 8e672fc); everything not mentioned stays as it is.
+Date: 2026-10-08. Status: built (see "As built" at the end). Builds on v5 (`2026-10-08-design-studio-v5-design.md`, as committed at 8e672fc); everything not mentioned stays as it is.
 
 v6 has two parts. Part A, sections 1 to 18, is image models and your own keys. Part B, sections B1 to B11 at the end, is product photos the image model sees; it builds on Part A's adapters and on v5's references and uploads.
 
@@ -581,3 +581,22 @@ Estimated agent time: about half a day.
 1. Are three product photos per session enough (for example front, occlusal and intaglio views)?
 2. Should "Use it as a guide" ship in v6, or only "Keep the product exactly"?
 3. Should FLUX.2 klein take product photos once its image fields are confirmed, as a free but looser option?
+
+## As built (2026-10-08)
+
+Built in three tasks (checkpoints A and D, then B and C, then E) with light checks at the owner's request, then one review of the whole branch and one fix round. The rulings, as the build's ledger recorded them:
+
+- All eight assumptions in section 1, and Part B's six, were confirmed as written. The build ran fast with light checks: the suite plus one demo smoke path per task, paid checks run by the controller only (at most three paid photos per task), and one whole-branch review at the end. The four tests in section 13 were not written; that is recorded as a gap.
+- The request guards answer to a Host that names `localhost`, `127.0.0.1`, `[::1]` or `studio` (the compose service, for the sample script), on any port, so the studio works wherever compose publishes it. A change must carry an Origin, or a Referer when there is no Origin, whose host and port are the request's own Host; `Origin: null` is refused, and a request with neither header (the sample script, the test client) is let through. `STUDIO_PORT`, added for the first guard, went with the final review.
+- Cloudflare keeps v5's messages ("Cloudflare rejected the credentials." and the rest), which the suite holds; the plain-message table in section 5 applies in full to OpenAI and Google.
+- A paid photo gets no second try on a 5xx, since a gateway's 502 or 504 may come after the photo was made and billed; Cloudflare and the free key checks keep theirs. A paid photo abandoned by a stop or a timeout keeps counting toward the day's photo limit, its cost unknown. These in-flight counts live in memory, so a restart forgets them.
+- The stand-in makes every model's photos only in demo mode, by v5's rule: no text model key and no Cloudflare keys. Cloudflare's keys alone make real free photos, as in v5.
+- Open question 4: GPT Image 1 mini and Nano Banana 2 Lite carry a cautious ceiling of $0.05 a photo with `checked: ""`, so their photos count against the spend limit and in Usage. They read "about $0.05 a photo (price not checked)" and are offered only once ticked on the Settings page.
+- The offered list becomes explicit once saved: while no model is ticked, every model whose price was checked is offered, and saving the Settings page's models form makes the ticked models the offered list.
+- The catalogue gained `option_prices` (a price for each choice of an option that changes it, for Nano Banana 2.1's 1K and 2K), and in Part B `max_input_images` and `input_token_price_usd`. The input token prices are assumed (OpenAI $10 a million, Google $0.50 a million) until a paid product round confirms them, and the recorded OpenAI cost leaves out the prompt's text input tokens, so it runs a few percent low.
+- `Sample.product_note` carries what happened to a round's product photos, shown under the round or on a compare round's card.
+- A session whose model lost its key or was unticked uses the default; with product photos never a words-only model: the default when it can see them, else the first usable model that can, else the round fails and says so.
+- An auto session with product photos cannot start on a words-only model: the Studio page keeps a chosen model that takes photos, else picks the first paid one that does and shows its price, and the server answers 422 with the reason.
+- When no free model can be used, the pickers select the first usable model, so a paid choice always shows its price; "Generate again" shows the same estimate as Generate.
+- A photo reused from the archive is not counted again: the photo counts and the spend count only the rounds that made photos.
+- Known gaps: the Google path has never run; demo cards show $0; the bar drops its name between 768 and 1023 pixels; the compare status line counts samples, not models; CODE-MAP's folder map.

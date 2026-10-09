@@ -187,7 +187,8 @@
     if (!budget || !hint) return;
     // v6 Part B: "These are product photos" makes the chosen reference images product photos
     // (three at most), so the Photo model offers only the models that take photos, and the
-    // estimate counts their input.
+    // estimate counts their input. The chosen model stays when it takes photos; otherwise the
+    // first paid model that does takes its place, with its price shown at once.
     const productsBox = form.querySelector("[data-references-products]");
     const files = form.querySelector("[data-reference-files]");
     const productPhotos = () =>
@@ -209,8 +210,13 @@
         option.hidden = photosOnly && words;
       });
       const usable = options.filter((option) => !option.disabled);
-      if (model.selectedOptions[0] && model.selectedOptions[0].disabled && usable.length) {
-        model.value = usable[0].value;
+      const chosen = model.selectedOptions[0];
+      if (chosen && chosen.disabled && usable.length) {
+        // The chosen model cannot see product photos, so the first paid one that can, whose
+        // price shows at once (its name and price), until the estimate's line arrives.
+        const paid = usable.find((option) => option.dataset.paid === "true");
+        model.value = (paid || usable[0]).value;
+        setText(hint, model.selectedOptions[0].textContent);
       }
       const none = form.querySelector("[data-no-photo-model]");
       if (none) none.hidden = !(photosOnly && usable.length === 0);
@@ -538,27 +544,42 @@
     if (page.dataset.poll === "true") pollSession(page.dataset.sessionId);
   }
 
-  // v6: the Model picker and "Samples a round" keep Generate's estimate true, and "Generate
-  // again" (in the newest round's feedback form) sends the picker's model.
+  // v6: the Model picker and "Samples a round" keep the estimates of Generate and of "Generate
+  // again" true, from the page's first draw (the browser may have kept another choice), and
+  // "Generate again" (in the newest round's feedback form) sends the picker's model.
   function initModelPicker() {
     const picker = document.querySelector("[data-model-picker]");
     if (!picker) return;
     const generate = document.querySelector("[data-generate-button]");
+    const again = document.querySelector("[data-again-button]");
     const count = document.querySelector("[data-sample-count]");
     const estimate = latestOnly(fetchEstimate);
+    const estimateAgain = latestOnly(fetchEstimate);
     const products = Number(picker.dataset.products || "0");
-    const syncButton = async () => {
-      if (!generate || !count) return;
-      const data = await estimate({ model: picker.value, count: fieldNumber(count), products });
-      if (data && data.button) generate.textContent = data.button;
-    };
-    picker.addEventListener("change", () => {
+    const syncMirrors = () => {
       document.querySelectorAll("[data-model-mirror]").forEach((input) => {
         input.value = picker.value;
       });
+    };
+    const syncButton = async () => {
+      if (generate && count) {
+        const data = await estimate({ model: picker.value, count: fieldNumber(count), products });
+        if (data && data.button) generate.textContent = data.button;
+      }
+      if (again) {
+        // "Generate again" makes the session's saved sample count, not the field's.
+        const saved = Number(again.dataset.againCount || "1");
+        const data = await estimateAgain({ model: picker.value, count: saved, products });
+        if (data && data.again_button) again.textContent = data.again_button;
+      }
+    };
+    picker.addEventListener("change", () => {
+      syncMirrors();
       syncButton();
     });
     if (count) count.addEventListener("input", syncButton);
+    syncMirrors();
+    syncButton();
   }
 
   // v6: "Compare models" takes two or three; past three the other boxes wait, and the button
@@ -568,6 +589,8 @@
     const button = document.querySelector("[data-compare-button]");
     const boxes = Array.from(document.querySelectorAll("[data-compare-model]"));
     if (!button || !boxes.length || button.disabled) return;
+    // The page draws the button idle ("Compare models"), so its words are the idle words.
+    const idle = button.textContent;
     const estimate = latestOnly(fetchEstimate);
     const picker = document.querySelector("[data-model-picker]");
     const products = picker ? Number(picker.dataset.products || "0") : 0;
@@ -578,7 +601,7 @@
       });
       button.disabled = ticked.length < 2 || ticked.length > 3;
       if (ticked.length < 2) {
-        button.textContent = "Compare models";
+        button.textContent = idle;
         estimate({}); // so a slower answer for an earlier choice is dropped
         return;
       }

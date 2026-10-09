@@ -8,13 +8,15 @@ over the same provider's key in `.env`), and it reads the photo settings from th
 time, so a change on the Settings page applies to the next photo.
 
 Free by default: a session with no model of its own uses the studio's default, FLUX.2 klein
-out of the box, and nothing falls back to a paid model on its own. In demo mode the stand-in
-makes every model's photos, so no image model is called and no key is used.
+out of the box, and nothing falls back to a paid model on its own, except to keep a session's
+product photos in front of a model that can see them. In demo mode (v5's rule: no text model
+key and no Cloudflare keys) the stand-in makes every model's photos, so no image model is
+called and no key is used; Cloudflare's keys alone make real free photos, as in v5.
 
 The daily limits are UTC days. The store counts the photos saved so far; the registry also
-counts, in memory, the paid photos asked for and not answered yet (held) and those made but
-not saved yet (their round is still being reviewed), so photos asked for at once cannot
-together pass a limit.
+counts, in memory, the paid photos asked for and not answered yet (held), those made but not
+saved yet (their round is still being reviewed), and those abandoned by a stop or a timeout,
+which the provider may still bill, so photos asked for at once cannot together pass a limit.
 
 v6 Part B: `input_limit` says how many product photos a model takes with the prompt, from its
 catalogue entry (0: words only); in demo mode the stand-in takes three for every model, so
@@ -27,14 +29,15 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Literal
 
 from pydantic import ValidationError
 
 from studio.config import Settings
-from studio.contracts import PhotoSettings, Sample
+from studio.contracts import DEFAULT_PHOTO_MODEL_ID, PhotoSettings, Sample, midnight_utc
 from studio.photos.base import (
+    NO_PHOTO_MODEL_FOR_PRODUCTS,
     PROVIDER_LABELS,
     KeyCheck,
     LimitReached,
@@ -68,6 +71,8 @@ KeySource = Literal["saved", "env", "none"]
 NO_PHOTO_MODEL = "No photo model can be used. Set up a provider's key, or choose another model."
 UNKNOWN_MODEL = "The studio does not know the photo model {model_id}."
 MODEL_GONE = "{label} is no longer available; this round used {default}."
+# v6 Part B: the session's model is gone and no model that can see its product photos is left.
+PRODUCT_MODEL_GONE = "{label} is no longer available. " + NO_PHOTO_MODEL_FOR_PRODUCTS
 PHOTO_LIMIT = (
     "Today's limit for {provider} is reached ({photos}). "
     "Raise it in Settings or choose another model."
@@ -80,10 +85,13 @@ PRICE_FREE = "{label} · free"
 PRICE_ABOUT = "{label} · about ${price:.2f} a photo"
 PRICE_LISTED = "{label} · ${price:.2f} a photo"
 PRICE_NOT_CHECKED = "{label} · price not checked"
+# A paid model whose price was not checked is priced at a cautious ceiling, and says so.
+PRICE_CEILING = "{label} · about ${price:.2f} a photo (price not checked)"
 # A photo's cost, after it was made: on its card and in the round's total.
 COST_FREE = "free"
 COST_UNKNOWN = "cost unknown"
 COST_ABOUT = "about ${cost:.2f}"
+COST_CEILING = "about ${cost:.2f} a photo (price not checked)"
 COST_EXACT = "${cost:.3f}"
 ROUND_TOTAL = "${total:.2f}"
 BADGE = "{label} · {cost}"
@@ -126,6 +134,8 @@ class PhotoRegistry:
         self._saved_keys, self._keys_unreadable = read_saved_keys(store, secret)
         self._held: dict[str, _Pending] = {}  # by sample id: asked for, not answered yet
         self._unsaved: dict[str, _Pending] = {}  # by sample id: made, not saved yet
+        # By sample id: abandoned by a stop or a timeout, so perhaps billed; cost not known.
+        self._abandoned: dict[str, _Pending] = {}
         self._stand_in = FakePhotoProvider()
 
     # ------------------------------------------------------------ the catalogue
@@ -141,9 +151,9 @@ class PhotoRegistry:
 
     @property
     def stand_in(self) -> bool:
-        """Whether the stand-in makes every model's photos: demo mode, or the tests' override."""
-        mode = self._settings.photo_provider
-        return mode == "fake" or (mode == "auto" and self._settings.demo_mode)
+        """Whether the stand-in makes every model's photos: v5's rule, while the settings'
+        `photo_mode` is "fake" (demo mode without Cloudflare's keys, or the tests' override)."""
+        return self._settings.photo_mode == "fake"
 
     def input_limit(self, model: ImageModel) -> int:
         """How many product photos the model takes with the prompt (v6 Part B): its catalogue
@@ -246,16 +256,25 @@ class PhotoRegistry:
 
     # ------------------------------------------------------------ which models
 
+    def offered(self, model: ImageModel, photo_settings: PhotoSettings | None = None) -> bool:
+        """Whether the pickers offer the model, keys aside: it is ticked on the Settings page;
+        while none is ticked, every model whose price was checked. A paid model whose price was
+        not checked is offered only once it is ticked."""
+        enabled = (photo_settings or self.photo_settings()).enabled_model_ids
+        if enabled:
+            return model.id in enabled
+        return not (model.paid and not model.checked)
+
     def usable_models(self) -> list[ImageModel]:
-        """The models a round may use now: those offered on the Settings page (all of them
-        while none is ticked) whose provider has a key. In demo mode the free ones need none."""
+        """The models a round may use now: those offered (see `offered`) whose provider has a
+        key. In demo mode the free ones need none."""
         if self._settings.photo_provider == "none":
             return []
-        enabled = set(self.photo_settings().enabled_model_ids)
+        photo_settings = self.photo_settings()
         return [
             model
             for model in self._catalogue
-            if (not enabled or model.id in enabled)
+            if self.offered(model, photo_settings)
             and (self.has_key(model.provider) or (self.stand_in and not model.paid))
         ]
 
@@ -278,23 +297,37 @@ class PhotoRegistry:
             return default
         return _first_free(self.usable_models())
 
-    def resolve(self, model_id: str) -> ResolvedModel:
+    def resolve(self, model_id: str, *, products: bool = False) -> ResolvedModel:
         """The model a round asked for with `model_id` uses: that model while it can be used;
         else the default, with the line saying so (no line when it asked for the default).
-        Raises PhotoUnavailable when no model can be used."""
+        Raises PhotoUnavailable when no model can be used.
+
+        With `products`, the session has product photos (v6 Part B): a model that can no longer
+        be used never gives way to a words-only one, which would invent the product. The
+        default stands in when it can see them, else the first usable model that can; with
+        none, PhotoUnavailable says so."""
         usable = self.usable_models()
         if model_id:
             asked = next((model for model in usable if model.id == model_id), None)
             if asked is not None:
                 return ResolvedModel(asked)
         default = self.default_model()
-        if default is None:
-            raise PhotoUnavailable(NO_PHOTO_MODEL)
-        if not model_id or model_id == default.id:
+        if not model_id:
+            if default is None:
+                raise PhotoUnavailable(NO_PHOTO_MODEL)
             return ResolvedModel(default)
         gone = self.model(model_id)
         label = gone.label if gone is not None else model_id
-        return ResolvedModel(default, MODEL_GONE.format(label=label, default=default.label))
+        if products:
+            candidates = [model for model in (default, *usable) if model is not None]
+            instead = next((model for model in candidates if self.takes_photos(model)), None)
+            if instead is None:
+                raise PhotoUnavailable(PRODUCT_MODEL_GONE.format(label=label))
+        elif default is None:
+            raise PhotoUnavailable(NO_PHOTO_MODEL)
+        else:
+            instead = default
+        return ResolvedModel(instead, MODEL_GONE.format(label=label, default=instead.label))
 
     def adapter_for(self, model_id: str) -> PhotoProvider:
         """The adapter that makes the model's photos, with its provider's key in use; the
@@ -337,19 +370,24 @@ class PhotoRegistry:
         if not model.paid:
             return PRICE_FREE.format(label=model.label)
         price = self.estimate(model)
-        if price is None or not model.checked:
+        if price is None:
             return PRICE_NOT_CHECKED.format(label=model.label)
+        if not model.checked:
+            return PRICE_CEILING.format(label=model.label, price=price)
         template = PRICE_ABOUT if model.price_basis == "usage" else PRICE_LISTED
         return template.format(label=model.label, price=price)
 
     def cost_label(self, sample: Sample) -> str:
         """What the sample's photo cost: "$0.048", "free", or "about $0.05" for a usage-priced
-        model that reported no usage; "cost unknown" when it is not known."""
+        model that reported no usage; "about $0.05 a photo (price not checked)" for a model
+        whose price was not checked; "cost unknown" when it is not known."""
         if sample.cost_usd is None:
             return COST_UNKNOWN
         if sample.cost_usd == 0:
             return COST_FREE
         model = self.model(sample.model_id)
+        if model is not None and model.paid and not model.checked:
+            return COST_CEILING.format(cost=sample.cost_usd)
         if sample.cost_basis == "list_price" and model is not None and model.price_basis == "usage":
             return COST_ABOUT.format(cost=sample.cost_usd)
         return COST_EXACT.format(cost=sample.cost_usd)
@@ -385,7 +423,7 @@ class PhotoRegistry:
         if self.stand_in or not model.paid:
             return
         photo_settings = self.photo_settings()
-        since = _midnight_utc()
+        since = midnight_utc()
         pending = self._pending_today()
         limit = photo_settings.daily_photo_limit.get(model.provider)
         if limit is not None:
@@ -411,23 +449,31 @@ class PhotoRegistry:
         cost = self.estimate(model, options, input_images) or 0.0
         self._held[sample.id] = _Pending(model.provider, cost, _today())
 
-    def record(self, sample: Sample) -> None:
+    def record(self, sample: Sample, *, abandoned: bool = False) -> None:
         """Count the sample's photo as made, at its cost, until the store has it; or drop what
-        `hold` counted when no photo was made."""
+        `hold` counted when no photo was made. A photo `abandoned` by a stop or a timeout may
+        still be billed, so it keeps counting toward today's photo limit, its cost not known."""
         held = self._held.pop(sample.id, None)
-        if held is None or not sample.image_path:
+        if held is None:
             return
-        cost = sample.cost_usd if sample.cost_usd is not None else held.cost
-        self._unsaved[sample.id] = replace(held, cost=cost)
+        if sample.image_path:
+            cost = sample.cost_usd if sample.cost_usd is not None else held.cost
+            self._unsaved[sample.id] = replace(held, cost=cost)
+        elif abandoned:
+            self._abandoned[sample.id] = replace(held, cost=0.0)
 
     def _pending_today(self) -> list[_Pending]:
-        """The paid photos of today the store does not count yet; saved ones are let go."""
+        """The paid photos of today the store does not count yet: held, made and not saved
+        (saved ones are let go), and abandoned (the store never counts a photo it lacks)."""
         today = _today()
         for sample_id, item in list(self._unsaved.items()):
             if item.day != today or self._store.get_sample(sample_id) is not None:
                 del self._unsaved[sample_id]
+        for sample_id, item in list(self._abandoned.items()):
+            if item.day != today:
+                del self._abandoned[sample_id]
         held = [item for item in self._held.values() if item.day == today]
-        return [*held, *self._unsaved.values()]
+        return [*held, *self._unsaved.values(), *self._abandoned.values()]
 
     # ------------------------------------------------------------ helpers
 
@@ -444,10 +490,11 @@ class PhotoRegistry:
         """A real adapter for the provider, with the key in use now, or with `keys`."""
         keys = keys if keys is not None else self.keys()
         if provider == "cloudflare":
+            # The model given here only stands in for a call without a catalogue entry.
             return CloudflarePhotoProvider(
                 account_id=keys.cloudflare_account_id,
                 api_token=keys.cloudflare_api_token,
-                model=self._settings.cloudflare_image_model,
+                model=DEFAULT_PHOTO_MODEL_ID,
             )
         if provider == "openai":
             return OpenAIPhotoProvider(keys.openai_api_key)
@@ -472,9 +519,5 @@ def _first_free(models: Iterable[ImageModel]) -> ImageModel | None:
     return next((model for model in models if not model.paid), None)
 
 
-def _midnight_utc() -> datetime:
-    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-
-
 def _today() -> date:
-    return datetime.now(timezone.utc).date()
+    return midnight_utc().date()

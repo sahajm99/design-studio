@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from studio.photos.base import DEMO_KEY_CHECK, KeyCheck, PhotoResult
+from studio.photos.base import DEMO_NO_IMAGE_CALLS, KeyCheck, PhotoResult
 from studio.photos.catalogue import ImageModel
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,6 @@ class FakePhotoProvider:
     """
 
     name = "fake"
-    max_input_images = MAX_INPUT_IMAGES
 
     async def generate(
         self,
@@ -70,7 +69,7 @@ class FakePhotoProvider:
         )
 
     async def test_key(self) -> KeyCheck:
-        return KeyCheck(ok=True, message=DEMO_KEY_CHECK)
+        return KeyCheck(ok=True, message=DEMO_NO_IMAGE_CALLS)
 
 
 def _draw(prompt: str, width: int, height: int, seed: int | None = None) -> Image.Image:

@@ -48,14 +48,11 @@ def write_agent_copy(store: Store, image_path: str, data: bytes) -> str:
     errors are passed on.
     """
     picture = _upright(data)
-    has_alpha = picture.mode in ("RGBA", "LA", "PA") or "transparency" in picture.info
-    with_alpha = picture.convert("RGBA") if has_alpha else None
-    # Many PNGs carry an alpha channel that is opaque throughout; those are photos, kept small.
-    transparent = with_alpha is not None and with_alpha.getchannel("A").getextrema()[0] < 255
-    relative = agent_copy_path(image_path, transparent=transparent)
+    see_through = _see_through(picture)
+    relative = agent_copy_path(image_path, transparent=see_through is not None)
     path = store.media_path(relative)
-    if transparent:
-        with_alpha.save(path, format="PNG")
+    if see_through is not None:
+        see_through.save(path, format="PNG")
     else:
         picture.convert("RGB").save(path, format="JPEG", quality=_AGENT_JPEG_QUALITY)
     return relative
@@ -103,17 +100,22 @@ def product_photo(store: Store, image_path: str) -> Path:
     if existing is not None:
         return existing
     picture = _in_srgb(_upright(store.media_path(image_path).read_bytes()))
-    has_alpha = picture.mode in ("RGBA", "LA", "PA") or "transparency" in picture.info
-    with_alpha = picture.convert("RGBA") if has_alpha else None
-    if with_alpha is not None and with_alpha.getchannel("A").getextrema()[0] < 255:
-        picture = with_alpha
-    else:
-        picture = picture.convert("RGB")
+    see_through = _see_through(picture)
+    picture = see_through if see_through is not None else picture.convert("RGB")
     # A new image from the pixels alone, so no EXIF, colour profile or text chunk goes with it.
     clean = Image.frombytes(picture.mode, picture.size, picture.tobytes())
     path = store.media_path(relative)
     clean.save(path, format="PNG")
     return path
+
+
+def _see_through(picture: Image.Image) -> Image.Image | None:
+    """The picture as RGBA when it shows transparency, else None. Many PNGs carry an alpha
+    channel that is opaque throughout; those are photos, and count as opaque."""
+    if picture.mode not in ("RGBA", "LA", "PA") and "transparency" not in picture.info:
+        return None
+    with_alpha = picture.convert("RGBA")
+    return with_alpha if with_alpha.getchannel("A").getextrema()[0] < 255 else None
 
 
 def _upright(data: bytes) -> Image.Image:

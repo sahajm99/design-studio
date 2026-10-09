@@ -42,8 +42,11 @@ from PIL import Image
 from studio.photos.base import (
     KEY_CHECK_FAILED,
     KEY_REFUSED,
+    NO_ANSWER_IN_TIME,
+    UNREACHABLE,
     KeyCheck,
     PhotoResult,
+    PhotoTimedOut,
     PhotoUnavailable,
     key_works,
 )
@@ -58,7 +61,13 @@ _WATERMARK_CLAUSE = "No text, no logos, no watermark."
 _KEY_CHECK_TIMEOUT = 30.0
 _LABEL = "Cloudflare"
 
+# What a failed photo's card says. v5's wording, kept as it was (the suite holds it); a timeout
+# and an unreachable service read as base.py's lines for every provider.
 CREDENTIALS_NOT_SET = "Cloudflare credentials are not set."
+CREDENTIALS_REJECTED = "Cloudflare rejected the credentials."
+ALLOWANCE_USED_UP = "Cloudflare's free daily allowance is used up."
+ERROR_STATUS = "Cloudflare returned an error ({status})."
+NO_IMAGE = "Cloudflare returned no image."
 
 
 class CloudflarePhotoProvider:
@@ -121,7 +130,7 @@ class CloudflarePhotoProvider:
         body = response.json()
         encoded = ((body or {}).get("result") or {}).get("image")
         if not encoded:
-            raise PhotoUnavailable("Cloudflare returned no image.")
+            raise PhotoUnavailable(NO_IMAGE)
 
         image_bytes = base64.b64decode(encoded)
         image = Image.open(io.BytesIO(image_bytes))
@@ -193,10 +202,10 @@ class CloudflarePhotoProvider:
                 response = await post()
             return response
         except httpx.TimeoutException as exc:
-            message = f"Cloudflare did not answer within {self.timeout:.0f} seconds."
-            raise PhotoUnavailable(message) from exc
+            message = NO_ANSWER_IN_TIME.format(provider=_LABEL, seconds=f"{self.timeout:.0f}")
+            raise PhotoTimedOut(message) from exc
         except httpx.RequestError as exc:
-            raise PhotoUnavailable("Cloudflare could not be reached.") from exc
+            raise PhotoUnavailable(UNREACHABLE.format(provider=_LABEL)) from exc
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_token}"}
@@ -207,11 +216,11 @@ class CloudflarePhotoProvider:
     def _raise_for_status(self, response: httpx.Response) -> None:
         status = response.status_code
         if status in (401, 403):
-            raise PhotoUnavailable("Cloudflare rejected the credentials.")
+            raise PhotoUnavailable(CREDENTIALS_REJECTED)
         if status == 429:
-            raise PhotoUnavailable("Cloudflare's free daily allowance is used up.")
+            raise PhotoUnavailable(ALLOWANCE_USED_UP)
         if not response.is_success:
-            message = f"Cloudflare returned an error ({status})."
+            message = ERROR_STATUS.format(status=status)
             detail = _first_error_message(response)
             if detail:
                 message = f"{message} {detail}"

@@ -134,7 +134,7 @@
           {% set is_product = reference.role is defined and reference.role == "product" %}
           {% set confirmed = reference.rights_confirmed_at is defined and reference.rights_confirmed_at %}
           <li class="reference-card{{ ' is-product' if is_product else '' }}" data-reference-card>
-            <span class="reference-thumb"><img src="/media/{{ reference.image_path }}" alt="Reference {{ loop.index }}" loading="lazy" />{% if is_product %}<span class="badge reference-badge">Product</span>{% endif %}</span>
+            <span class="reference-thumb"><img src="/media/{{ reference.image_path }}" alt="Reference {{ loop.index }}" loading="lazy" />{% if is_product %}<span class="badge reference-badge">{{ role_product }}</span>{% endif %}</span>
             {% if part_b %}
             {#- Style or Product. The first switch to Product asks for the rights line, and is
                 saved only with it ticked (app.js shows it then; the server checks it). #}
@@ -147,8 +147,8 @@
                     <span>Style</span>
                   </label>
                   <label class="pill-option">
-                    <input type="radio" name="role" value="product" {{ "checked" if is_product else "" }} {{ off }}{% if products_full and not is_product %} disabled title="A session takes three product photos."{% endif %} />
-                    <span>Product</span>
+                    <input type="radio" name="role" value="product" {{ "checked" if is_product else "" }} {{ off }}{% if products_full and not is_product %} disabled title="{{ products_full_line }}"{% endif %} />
+                    <span>{{ role_product }}</span>
                   </label>
                 </span>
               </fieldset>
@@ -187,7 +187,7 @@
             real product photo is uploaded once and reused. Each is added as Style. #}
         {% if brand_uploads is defined and brand_uploads %}
         <details class="references-uploads">
-          <summary>From your uploads</summary>
+          <summary>{{ from_your_uploads }}</summary>
           <ul class="editor-shelf-grid">
             {% for upload in brand_uploads %}
             <li>
@@ -485,7 +485,7 @@
           </li>
           {% endfor %}
         </ul>
-        <p class="hint">Choose two or three. Each makes one photo from this prompt, and the critic ranks them together.</p>
+        <p class="hint">{{ compare_hint }}</p>
         <div class="actions">
           <button type="submit" name="compare" value="on" class="btn" data-compare-button {{ off }}>{{ compare_label }}</button>
         </div>
@@ -583,7 +583,7 @@
           {% if product_lines.fidelity %}<p class="sample-scores sample-fidelity">{{ product_lines.fidelity }}</p>{% endif %}
           {% if sample.review.flags %}
           <div class="flag-row">
-            {% for flag in sample.review.flags %}<span class="flag-chip">{{ "Product changed" if flag == "product_changed" else flag.replace("_", " ") }}</span>{% endfor %}
+            {% for flag in sample.review.flags %}<span class="flag-chip">{{ product_changed_label if flag == "product_changed" else flag.replace("_", " ") }}</span>{% endfor %}
           </div>
           {% endif %}
           {% if sample.rank %}
@@ -636,7 +636,7 @@
       <textarea id="feedback-{{ round.round }}" name="text" rows="2" placeholder="What should change?" {{ off }}>{{ round.feedback.text if round.feedback else "" }}</textarea>
       <div class="actions">
         <button type="submit" class="btn" {{ off }}>Revise the prompt with this feedback</button>
-        <button type="submit" formaction="/sessions/{{ session.id }}/again" class="btn" {{ off }}>Generate again</button>
+        <button type="submit" formaction="/sessions/{{ session.id }}/again" class="btn" data-again-button data-again-count="{{ session.sample_count }}" {{ off }}>{{ again_label if again_label is defined else "Generate again" }}</button>
       </div>
     </form>
     {% elif round.feedback %}
