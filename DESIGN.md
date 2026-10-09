@@ -108,7 +108,8 @@ page introducing the eight agents is the next page to be built on it.
 | Service | How | Why |
 | --- | --- | --- |
 | Gemini 3.5 Flash-Lite | ADK `LlmAgent` with structured output; the client retries 429 and 5xx | The free tier with vision; structured output removes parsing |
-| Cloudflare Workers AI, flux-2-klein-4b | One HTTP call per photo, 180 second budget, one retry on timeout | The only zero-cost photo model found with a usable daily allowance |
+| Cloudflare Workers AI, flux-2-klein-4b | One HTTP call per photo, 180 second budget, one retry on timeout | The only zero-cost photo model found with a usable daily allowance; the default |
+| OpenAI GPT Image and Google Nano Banana (v6, optional) | One adapter per provider behind a registry; models are catalogue data with prices; keys saved encrypted or from `.env`; costs recorded per photo; daily limits | The photo model decides most of a poster's quality, and the paid models keep anatomy and products true; free by default, paid on the designer's own key with the price shown first |
 | Tavily search | One HTTP call per query, 900 credits a month cap in the store | Free plan with no card; Google's grounding is not available at zero cost on the account used |
 
 Each service sits behind a small interface with a fake beside it, chosen from the environment:
@@ -191,6 +192,9 @@ the studio is built so that call is one click away at every step.
 | Reference images as image-to-image input | Rejected | The free photo model is text to image; references guide the prompt and are never copied |
 | An editor agent that redraws the layout | Rejected for a fixed set of edit operations | A small command set is reliable, keeps the guardrails in code, and makes every change explainable and reversible |
 | A shade or image over the logo or words | Reported, never moved | A sticker over the logo's corner may be wanted; the guardrail line says what is covered |
+| Paid models chosen by the studio on its own | Rejected | Nothing paid runs without the designer's key and a price shown first; auto mode falls back only to the free default |
+| Keys in the browser or in `.env` only | Rejected for encrypted keys in SQLite, write-only | One command still starts everything; a copied database does not leak keys |
+| Describing the product better in words | Rejected for product photos the image model sees | Words set the tooth shade and invented the anatomy; the photo keeps the product and the critic checks it stayed true |
 
 ## 10. Costs and limits
 
@@ -232,6 +236,10 @@ Everything runs on free tiers; the numbers and the model landscape are in
 - Only the Hybridge kit has been run. A second kit is the next proof of the brand-agnostic claim.
 - One process, one container, SQLite, in-memory agent sessions. A run does not survive a restart
   and nothing queues.
+- v6's paid adapters, the encrypted keys, the request guards and the product-photo path have no
+  tests of their own; the OpenAI path was checked with one real photo, the Google path not at
+  all (no billed Google project yet). Spend totals are estimates from list prices and reported
+  usage; the provider's billing page is the record.
 
 ## 12. What another week buys, in order
 
@@ -277,7 +285,12 @@ then tested by hand with real models. A fifth version followed the demo call on 
 designer's own images as references and in the editor, and the editor's Ask mode, from the spec
 `docs/superpowers/specs/2026-10-08-design-studio-v5-design.md`, built the same way in three
 tasks with a review, a fix round and a re-review each, then one review of the whole and its fix
-wave. The rulings taken while building are listed at the end of each spec, under "As built". Tests were written for the foundations in v1 and v2; from
+wave. The rulings taken while building are listed at the end of each spec, under "As built".
+A sixth version the same evening, from the spec `2026-10-08-design-studio-v6-design.md`:
+paid image models on the designer's own keys behind a registry, a Settings page with encrypted
+keys, a model on every round, comparison rounds, costs and limits, request guards, and product
+photos the image model sees. Built in three tasks with light checks at the owner's request,
+then one review of the whole. Tests were written for the foundations in v1 and v2; from
 v3 on, speed was chosen over new tests, which section 11 records as a gap. Rulings made along the
 way are in the specs' revision notes, the most consequential being the switch from Google
 grounding to a search provider after the spike showed no zero-cost path.

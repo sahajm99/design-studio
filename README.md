@@ -34,6 +34,16 @@ Copy `.env.example` to `.env` and fill in what you have. Each key is free and ne
 | `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` | [Cloudflare dashboard](https://dash.cloudflare.com), Workers AI; a token with Workers AI permission | Photos, on flux-2-klein-4b; about 40 to 70 photos a day on the free allowance |
 | `TAVILY_API_KEY` (optional) | [Tavily](https://app.tavily.com), 1,000 searches a month | Web research before the draft |
 
+### Paid image models, on your own key (optional)
+
+The free model stays the default. On the Settings page you can save an OpenAI key or a Google
+key for the image models (GPT Image, Nano Banana), test it for free, choose which models to
+offer, set the default and the daily limits. Saved keys are encrypted on your machine and never
+shown again; `OPENAI_API_KEY` and `GOOGLE_IMAGE_API_KEY` in `.env` work too. Every paid choice
+shows its price before you spend, every photo records what it cost, and the daily limits stop a
+runaway. Google's image models need billing on the Google project behind the key, so use a
+project of its own and the free text key stays free.
+
 After editing `.env`, recreate the container so it reads the file:
 
 ```
@@ -78,7 +88,11 @@ The prompt writer turns the brief and the direction into a photo prompt, a headl
 caption and hashtags, and chooses a layout. You can edit the prompt before the photos are made.
 Each round makes the samples, the critic scores each one against the brand's quality bar, and the
 ranker orders them. React to samples, write feedback, and revise the prompt; a feedback line that
-rejects something becomes a banned term the reviser cannot bring back.
+rejects something becomes a banned term the reviser cannot bring back. A model picker beside
+"Samples a round" chooses the image model for the round, with its price; "Compare models" makes
+one photo per chosen model from the same prompt and ranks them together. A reference marked
+"Product" goes to the image model itself, which keeps the product and makes a new scene around
+it, and the critic scores how true the product stayed.
 
 ### 4. Layouts and the final check
 
@@ -123,6 +137,13 @@ Every run, every step, with its status, duration, provider and a one-line note; 
 their parent. When something goes wrong, this page says where.
 
 ![An automatic run](docs/screenshots/07-run.png)
+
+### 9. Settings
+
+Image models and your keys: one card per provider with its key, a free "Test key", the models
+to offer with their prices and presets, the default model, the daily photo and spend limits,
+and a usage table for today and this month. The studio answers only on this computer, and a
+request from another site is refused.
 
 ## The studio's own look
 
