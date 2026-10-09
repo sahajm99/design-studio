@@ -3,14 +3,25 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from studio.photos.base import PhotoResult
+from studio.photos.base import DEMO_KEY_CHECK, KeyCheck, PhotoResult
+from studio.photos.catalogue import ImageModel
+
+logger = logging.getLogger(__name__)
 
 _HEX_COLOUR_RE = re.compile(r"#([0-9A-Fa-f]{6})")
+# v6 Part B: the stand-in takes product photos for every model it stands in for, so demo mode
+# shows the whole path; it draws the first one as an inset this wide, in the lower right.
+MAX_INPUT_IMAGES = 3
+_INSET_WIDTH = 0.26
+_INSET_MARGIN = 0.04
+_INSET_BORDER = 4
 
 
 class FakePhotoProvider:
@@ -19,17 +30,47 @@ class FakePhotoProvider:
     The same prompt and seed always draw the same photo, so demo-mode runs
     and tests are reproducible without a network call. A different seed
     draws a different photo for the same prompt.
+
+    v6: in demo mode it stands in for every model in the catalogue. Its photos say which model
+    was asked for, cost nothing and carry the `fake` provider id, and its key check calls no one.
+
+    v6 Part B: it takes up to three product photos, whatever model it stands in for, and draws
+    a small inset of the first one in the lower right, so the product photo's path is visible.
     """
 
     name = "fake"
+    max_input_images = MAX_INPUT_IMAGES
 
     async def generate(
-        self, prompt: str, width: int, height: int, out_path: Path, *, seed: int | None = None
+        self,
+        prompt: str,
+        width: int,
+        height: int,
+        out_path: Path,
+        *,
+        model: ImageModel | None = None,
+        options: dict[str, str] | None = None,
+        seed: int | None = None,
+        images: Sequence[Path] = (),
     ) -> PhotoResult:
         image = _draw(prompt, width, height, seed)
+        sent = list(images)[:MAX_INPUT_IMAGES]
+        if sent:
+            _draw_inset(image, sent[0])
         out_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(out_path, format="PNG")
-        return PhotoResult(path=str(out_path), provider=self.name, prompt=prompt)
+        return PhotoResult(
+            path=str(out_path),
+            provider=self.name,
+            model_id=model.id if model is not None else "",
+            prompt=prompt,
+            cost_usd=0.0,
+            cost_basis="free_allowance",
+            input_images=len(sent),
+        )
+
+    async def test_key(self) -> KeyCheck:
+        return KeyCheck(ok=True, message=DEMO_KEY_CHECK)
 
 
 def _draw(prompt: str, width: int, height: int, seed: int | None = None) -> Image.Image:
@@ -76,6 +117,26 @@ def _draw(prompt: str, width: int, height: int, seed: int | None = None) -> Imag
 
     glow = Image.new("RGB", (width, height), glow_colour)
     return Image.composite(glow, image, mask)
+
+
+def _draw_inset(image: Image.Image, product: Path) -> None:
+    """Paste the product photo, scaled to about a quarter of the width and framed in white, in
+    the lower right of `image`. A product photo that cannot be read is left out quietly: the
+    stand-in's photo is still made."""
+    try:
+        with Image.open(product) as opened:
+            picture = opened.convert("RGB")
+    except Exception as error:
+        logger.warning("The stand-in could not read a product photo: %s", type(error).__name__)
+        return
+    width, height = image.size
+    inner = max(8, round(width * _INSET_WIDTH))
+    thumb = ImageOps.contain(picture, (inner, inner))
+    framed = ImageOps.expand(thumb, border=_INSET_BORDER, fill=(255, 255, 255))
+    margin = round(width * _INSET_MARGIN)
+    x = max(0, width - framed.width - margin)
+    y = max(0, height - framed.height - margin)
+    image.paste(framed, (x, y))
 
 
 def _backdrop_colour(prompt: str) -> tuple[int, int, int] | None:

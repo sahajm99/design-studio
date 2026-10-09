@@ -1,5 +1,6 @@
 # Secrets never go in git
 .env
+secret.key
 
 # Runtime data: database, cached reference images, photos, posts
 data/

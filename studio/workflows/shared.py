@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from studio.config import Settings
 from studio.contracts import (
+    MAX_PRODUCT_PHOTOS,
     BrandKit,
     DesignSpec,
     LayoutTemplate,
@@ -41,7 +42,7 @@ from studio.contracts import (
     new_id,
 )
 from studio.media import agent_picture
-from studio.photos.base import PhotoProvider
+from studio.photos.registry import PhotoRegistry
 from studio.render import CUSTOM_DOES_NOT_FIT, Renderer
 from studio.research.base import SearchProvider
 from studio.store import Store
@@ -100,6 +101,10 @@ DESIGNER_REFERENCE = "Designer's reference {number}"
 DESIGNER_REFERENCE_WITH_NOTE = "Designer's reference {number}: {note}"
 # Ends the note of a step that sent the designer's references, "2 designer references".
 DESIGNER_REFERENCES_SENT = " {references} sent."
+# v6 Part B: the line before each product photo in an agent's message, with its note when it
+# has one.
+PRODUCT_PHOTO = "Product photo {number}"
+PRODUCT_PHOTO_WITH_NOTE = "Product photo {number}: {note}"
 
 
 class DraftInvalid(ValueError):
@@ -114,7 +119,8 @@ class Deps:
     store: Store
     kit: BrandKit
     llm: BaseLlm
-    photo_provider: PhotoProvider | None
+    # v6: every image model, its key and its limits; a round asks it for the session's model.
+    photos: PhotoRegistry
     renderer: Renderer
     # v4: the web search the scout runs through; None when research has no provider.
     search_provider: SearchProvider | None = None
@@ -442,6 +448,65 @@ def designer_references_sent(count: int) -> str:
     if not count:
         return ""
     return DESIGNER_REFERENCES_SENT.format(references=plural(count, "designer reference"))
+
+
+# ------------------------------------------------------------ product photos (v6 Part B)
+
+
+def style_references(references: list[SessionReference]) -> list[SessionReference]:
+    """The references that guide the look, in their order: every one not marked Product."""
+    return [reference for reference in references if reference.role != "product"]
+
+
+def product_references(references: list[SessionReference]) -> list[SessionReference]:
+    """The references marked Product, in their order, three at most: the photos of the real
+    product the image model receives with the prompt."""
+    return [reference for reference in references if reference.role == "product"][
+        :MAX_PRODUCT_PHOTOS
+    ]
+
+
+def session_products(store: Store, session_id: str | None) -> list[SessionReference]:
+    """The session's product photos whose image is still in the data folder, three at most."""
+    return product_references(designer_references(store, session_id))
+
+
+def product_photo_label(number: int, note: str) -> str:
+    """The line naming a product photo before its image: "Product photo 1", and its note when
+    it has one."""
+    if note.strip():
+        return PRODUCT_PHOTO_WITH_NOTE.format(number=number, note=note.strip())
+    return PRODUCT_PHOTO.format(number=number)
+
+
+def product_photo_context(products: list[SessionReference]) -> list[dict[str, Any]]:
+    """The product photos as an agent's context carries them, numbered from 1: each one's number
+    and note, quoted, since the designer wrote it."""
+    return [
+        {"number": number, "note": quoted(reference.note)}
+        for number, reference in enumerate(products, start=1)
+    ]
+
+
+def product_photo_images(
+    store: Store, products: list[SessionReference]
+) -> list[dict[str, str]]:
+    """Each product photo's agent copy with the line naming it, numbered as the context numbers
+    them, for the prompt writer and the critic (the image model gets the PNG copy instead)."""
+    return [
+        {
+            "label": product_photo_label(number, reference.note),
+            "path": str(agent_picture(store, reference.image_path)),
+        }
+        for number, reference in enumerate(products, start=1)
+    ]
+
+
+def products_sent(count: int) -> str:
+    """The sentence a step's note gains when it sent `count` product photos, or ""."""
+    if not count:
+        return ""
+    return DESIGNER_REFERENCES_SENT.format(references=plural(count, "product photo"))
 
 
 def plural(count: int, noun: str) -> str:

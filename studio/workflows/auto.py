@@ -43,6 +43,7 @@ from studio.contracts import (
     StudioSession,
 )
 from studio.models import describe_llm
+from studio.photos.base import PhotoUnavailable
 from studio.render import describe
 from studio.research.base import SearchUnavailable
 from studio.store import Store
@@ -66,6 +67,7 @@ from studio.workflows.shared import (
     quality_bar_parts,
     run_workflow,
     saved_post,
+    session_products,
     settle,
     text_message,
     update_session,
@@ -109,6 +111,14 @@ DRAFTED = "Version {number} drafted."
 MAKING_ROUND = "Round {round} of {rounds}: making {photos}…"
 REVISING_PROMPT = "Round {round} of {rounds}: revising the prompt…"
 PHOTOS_FAILED = "Stopped: {error} Composing with the best photo so far."
+# v6: a paid model that failed or reached a limit hands the rest of the session to a free one.
+FINISHING_ON_FREE = "Round {round}: {model} stopped ({reason}); finishing on {fallback}."
+# v6 Part B: never with product photos when the free model is words only, since it would
+# invent the product.
+NOT_FINISHING_ON_WORDS = (
+    "Round {round}: {model} stopped ({reason}); not finishing on {fallback}, which cannot see "
+    "product photos and would invent the product."
+)
 NOT_JUDGED = "Round {round}: the critic could not judge this round, so it was composed as it is."
 GOOD_ENOUGH = "Round {round}: top {top} of 5, good enough, composing."
 ROUNDS_LIMIT = "Round {round}: top {top} of 5, rounds limit reached, composing."
@@ -463,7 +473,10 @@ async def _run_rounds(
     The limits are read again at the top of every pass, with the session as last saved. The
     step's note says which round is being made, or that the prompt is being revised for it.
     A round that makes no photo at all ends the loop when an earlier round made one, so the
-    best photo so far is composed; with no photo from any round, the auto run fails.
+    best photo so far is composed; with no photo from any round, the auto run fails. A paid
+    model that fails or reaches a daily limit hands the rest of the session to the free
+    default first, when the photo settings say so (v6), and a round that made no photo is
+    made again on it.
     """
     store = deps.store
     while True:
@@ -481,7 +494,10 @@ async def _run_rounds(
         stage = _stage(deps, run, latest, "samples")
         samples = await run_samples(deps, stage, latest, count=count)
         failed = _failed(store, stage)
-        if failed is not None:
+        if _finish_on_free(deps, latest, round_number, samples, stage):
+            if failed is not None:
+                continue  # the round is made again, on the free model
+        elif failed is not None:
             if not _has_photo(store, session):
                 raise ValueError(failed.error)
             _record(store, session, PHOTOS_FAILED.format(error=failed.error), stopped_by="budget")
@@ -560,6 +576,8 @@ def _scored(sample: Sample) -> dict[str, Any]:
         "flags": list(review.flags),
         "verdict": review.verdict,
         "suggested_change": review.suggested_change,
+        # v6 Part B: how true the product stayed, when the round had product photos.
+        "product_fidelity": review.product_fidelity,
     }
 
 
@@ -680,6 +698,50 @@ def _best_sample(store: Store, session: StudioSession) -> Sample:
 def _has_photo(store: Store, session: StudioSession) -> bool:
     """Whether a round of the session has made a photo for `_best_sample` to compose."""
     return any(s.round >= 1 and s.image_path for s in store.list_samples(session.id))
+
+
+def _finish_on_free(
+    deps: Deps, session: StudioSession, round_number: int, samples: list[Sample], stage: Run
+) -> bool:
+    """When the round's model is paid and a photo of it failed or met a daily limit, make the
+    rest of the session use the free default and say so in a decision line; True when it did
+    (v6). Only with the photo settings' fallback on, and only for a failure making photos: a
+    stage that failed after its photos were made keeps its model. Never a paid model.
+
+    v6 Part B: never a words-only model for a session with product photos, since its photos
+    would invent the product; the decision line says so, and the session goes on as it would
+    with the fallback off."""
+    registry = deps.photos
+    if not registry.photo_settings().auto_fallback_to_default:
+        return False
+    failed = _failed(deps.store, stage)
+    if failed is not None:
+        steps = deps.store.list_events(stage.id)
+        photo_step = any(e.step == "generate_samples" and e.status == "failed" for e in steps)
+        reason = failed.error if photo_step else None
+    else:
+        reason = next((sample.error for sample in samples if sample.error), None)
+    if not reason:
+        return False
+    try:
+        used = registry.resolve(session.photo_model_id).model
+    except PhotoUnavailable:
+        return False
+    fallback = registry.fallback_model()
+    if not used.paid or fallback is None or fallback.id == used.id:
+        return False
+    if not registry.takes_photos(fallback) and session_products(deps.store, session.id):
+        line = NOT_FINISHING_ON_WORDS.format(
+            round=round_number, model=used.label, reason=_sentence(reason), fallback=fallback.label
+        )
+        _record(deps.store, session, line)
+        return False
+    update_session(deps.store, session, photo_model_id=fallback.id)
+    line = FINISHING_ON_FREE.format(
+        round=round_number, model=used.label, reason=_sentence(reason), fallback=fallback.label
+    )
+    _record(deps.store, session, line)
+    return True
 
 
 # ----------------------------------------------------------------- final check

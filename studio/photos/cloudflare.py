@@ -15,23 +15,50 @@ does not appear anywhere on the page either, so `generate`'s `seed`
 parameter, added to match the `PhotoProvider` protocol, is accepted but
 never sent. See the task report for the exact page contents this was built
 against.
+
+v6: the model comes from the catalogue entry (the one the provider was built with when no
+entry is given, as v5 called it), every photo reports a cost of 0 on the free daily allowance,
+a server error gets one more try, and the free key check lists the account's text-to-image
+models. Every message passes through `redact`, so neither the token nor the account id can
+reach a card or the log.
+
+v6 Part B: FLUX.2 klein stays words only (its catalogue entry has `max_input_images: 0`) until
+its image fields are confirmed, so the registry never hands this adapter a product photo, and
+`images`, when given anyway, is not sent: the photo is made from the words alone, and the round
+says so ("This model cannot see product photos; ...").
 """
 
 from __future__ import annotations
 
 import base64
 import io
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import httpx
 from PIL import Image
 
-from studio.photos.base import PhotoResult, PhotoUnavailable
+from studio.photos.base import (
+    KEY_CHECK_FAILED,
+    KEY_REFUSED,
+    KeyCheck,
+    PhotoResult,
+    PhotoUnavailable,
+    key_works,
+)
+from studio.photos.catalogue import ImageModel
+from studio.photos.transport import client_for, send
+from studio.secrets import redact
 
 _URL_TEMPLATE = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
+_MODELS_URL = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/models/search"
 _SIZE_MULTIPLE = 32
 _WATERMARK_CLAUSE = "No text, no logos, no watermark."
+_KEY_CHECK_TIMEOUT = 30.0
+_LABEL = "Cloudflare"
+
+CREDENTIALS_NOT_SET = "Cloudflare credentials are not set."
 
 
 class CloudflarePhotoProvider:
@@ -50,21 +77,31 @@ class CloudflarePhotoProvider:
     ) -> None:
         self.account_id = account_id
         self.api_token = api_token
-        self.model = model
+        self.model = model  # the model id used when `generate` is given no catalogue entry
         self.client = client
         self.timeout = timeout
 
     async def generate(
-        self, prompt: str, width: int, height: int, out_path: Path, *, seed: int | None = None
+        self,
+        prompt: str,
+        width: int,
+        height: int,
+        out_path: Path,
+        *,
+        model: ImageModel | None = None,
+        options: dict[str, str] | None = None,
+        seed: int | None = None,
+        images: Sequence[Path] = (),
     ) -> PhotoResult:
+        # `images` is not sent: words only in v6 (see the module docstring).
         if not self.account_id or not self.api_token:
-            raise PhotoUnavailable("Cloudflare credentials are not set.")
+            raise PhotoUnavailable(CREDENTIALS_NOT_SET)
 
+        model_id = model.id if model is not None else self.model
         full_prompt = _with_watermark_clause(prompt)
-        url = _URL_TEMPLATE.format(account_id=self.account_id, model=self.model)
-        headers = {"Authorization": f"Bearer {self.api_token}"}
+        url = _URL_TEMPLATE.format(account_id=self.account_id, model=model_id)
         # `seed` is not sent: this model's page documents no such field (see the
-        # module docstring), so there is nothing to put it in.
+        # module docstring), so there is nothing to put it in. FLUX.2 klein has no options.
         fields = {
             "prompt": (None, full_prompt),
             "width": (None, str(_round_size(width))),
@@ -74,12 +111,12 @@ class CloudflarePhotoProvider:
         owns_client = self.client is None
         client = self.client or httpx.AsyncClient()
         try:
-            response = await self._send(client, url, headers, fields)
+            response = await self._send(client, url, self._headers(), fields)
         finally:
             if owns_client:
                 await client.aclose()
 
-        _raise_for_status(response)
+        self._raise_for_status(response)
 
         body = response.json()
         encoded = ((body or {}).get("result") or {}).get("image")
@@ -93,14 +130,52 @@ class CloudflarePhotoProvider:
 
         return PhotoResult(
             path=str(out_path),
-            provider=f"{self.name}:{self.model.rsplit('/', 1)[-1]}",
+            provider=f"{self.name}:{model_id.rsplit('/', 1)[-1]}",
+            model_id=model_id,
             prompt=full_prompt,
+            cost_usd=0.0,
+            cost_basis="free_allowance",
         )
+
+    async def test_key(self) -> KeyCheck:
+        """The free check: the account's text-to-image models, as the token sees them."""
+        if not self.account_id or not self.api_token:
+            return KeyCheck(ok=False, message=CREDENTIALS_NOT_SET)
+        url = _MODELS_URL.format(account_id=self.account_id)
+        try:
+            async with client_for(self.client) as client:
+                response = await send(
+                    lambda: client.get(
+                        url,
+                        params={"task": "Text-to-Image"},
+                        headers=self._headers(),
+                        timeout=_KEY_CHECK_TIMEOUT,
+                    ),
+                    provider=_LABEL,
+                    timeout=_KEY_CHECK_TIMEOUT,
+                    retry_rate_limit=lambda response: True,
+                )
+        except PhotoUnavailable as error:
+            return KeyCheck(ok=False, message=self._redacted(str(error)))
+        if response.status_code in (401, 403):
+            return KeyCheck(ok=False, message=KEY_REFUSED.format(provider=_LABEL))
+        if not response.is_success:
+            message = KEY_CHECK_FAILED.format(provider=_LABEL, status=response.status_code)
+            return KeyCheck(ok=False, message=message)
+        try:
+            listed: Any = response.json().get("result") or []
+        except (ValueError, AttributeError):
+            listed = []
+        names = sorted(
+            str(item["name"]) for item in listed if isinstance(item, dict) and item.get("name")
+        )
+        return KeyCheck(ok=True, message=key_works(len(names)), visible_models=names)
 
     async def _send(
         self, client: httpx.AsyncClient, url: str, headers: dict[str, str], fields: dict[str, Any]
     ) -> httpx.Response:
-        """Send the request, and send it once more when the first attempt times out.
+        """Send the request, and send it once more when the first attempt times out, and once
+        more when the answer is a server error.
 
         Only a second timeout fails the photo. Any other network error, such as a refused
         connection or a failed DNS lookup, fails it at once.
@@ -111,14 +186,36 @@ class CloudflarePhotoProvider:
 
         try:
             try:
-                return await post()
+                response = await post()
             except httpx.TimeoutException:
-                return await post()
+                response = await post()
+            if response.status_code >= 500:
+                response = await post()
+            return response
         except httpx.TimeoutException as exc:
             message = f"Cloudflare did not answer within {self.timeout:.0f} seconds."
             raise PhotoUnavailable(message) from exc
         except httpx.RequestError as exc:
             raise PhotoUnavailable("Cloudflare could not be reached.") from exc
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_token}"}
+
+    def _redacted(self, message: str) -> str:
+        return redact(message, [self.api_token, self.account_id])
+
+    def _raise_for_status(self, response: httpx.Response) -> None:
+        status = response.status_code
+        if status in (401, 403):
+            raise PhotoUnavailable("Cloudflare rejected the credentials.")
+        if status == 429:
+            raise PhotoUnavailable("Cloudflare's free daily allowance is used up.")
+        if not response.is_success:
+            message = f"Cloudflare returned an error ({status})."
+            detail = _first_error_message(response)
+            if detail:
+                message = f"{message} {detail}"
+            raise PhotoUnavailable(self._redacted(message))
 
 
 def _with_watermark_clause(prompt: str) -> str:
@@ -135,20 +232,6 @@ def _round_size(value: int) -> int:
     """
     rounded = round(value / _SIZE_MULTIPLE) * _SIZE_MULTIPLE
     return max(rounded, _SIZE_MULTIPLE)
-
-
-def _raise_for_status(response: httpx.Response) -> None:
-    status = response.status_code
-    if status in (401, 403):
-        raise PhotoUnavailable("Cloudflare rejected the credentials.")
-    if status == 429:
-        raise PhotoUnavailable("Cloudflare's free daily allowance is used up.")
-    if not response.is_success:
-        message = f"Cloudflare returned an error ({status})."
-        detail = _first_error_message(response)
-        if detail:
-            message = f"{message} {detail}"
-        raise PhotoUnavailable(message)
 
 
 def _first_error_message(response: httpx.Response) -> str | None:

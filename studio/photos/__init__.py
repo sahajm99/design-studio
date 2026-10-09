@@ -1,4 +1,9 @@
-"""Build the configured photo provider from settings."""
+"""Where photos come from.
+
+v6: the app asks `studio.photos.registry.PhotoRegistry` for a model's adapter; the models are
+data in `catalogue.yaml`. `get_photo_provider`, v5's one-provider choice, stays for callers
+that want the single provider the settings name.
+"""
 
 from __future__ import annotations
 

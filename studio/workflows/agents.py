@@ -100,6 +100,12 @@ PROMPT_WRITER_PROMPT = "\n".join(
         "arriving after the line naming it. Draw on their subject, composition, light, materials "
         "and mood as the brief's intent, in the order they are given; say in reason_prompt what "
         "you took from each; never describe their text or logos; never copy one.",
+        "product_photos are photos of the real product, each arriving after the line naming it, "
+        "\"Product photo 1\" and so on; the image model receives them with your photo_prompt.",
+        "When product_photos are given, the photo shows exactly that product. Write photo_prompt "
+        "as the scene around 'the prosthesis in the product photo': the setting, the surface, "
+        "the light, the framing, the camera and the mood. Never describe its shape, its colours "
+        "or its parts, and never ask to change them.",
         "When the direction's format is statement, or the layout is type_only, the photograph "
         "is a backdrop for the words: describe a quiet, even surface or texture in the mode's "
         "backdrop colour, in soft light, with nothing else in the frame.",
@@ -142,7 +148,9 @@ CRITIC_PROMPT = "\n".join(
     [
         "You judge one generated photograph for a social post for the brand named in the "
         "context below.",
-        "The photograph arrives first in the message. When the brand has an ideal example, it "
+        "The photograph arrives first in the message, or right after the product photos when "
+        "they are given, each after its line \"Product photo 1\" and so on; the line \"Judge "
+        "this sample.\" follows the photograph. When the brand has an ideal example, it "
         "follows after the line \"The brand's quality bar.\": hold the photograph to that bar, "
         "and never judge the example itself.",
         "When the designer's references follow, labelled, they show what this post should look "
@@ -167,6 +175,12 @@ CRITIC_PROMPT = "\n".join(
         "Raise a flag only when you are sure: text_in_image, logo_in_image, distorted_anatomy, "
         "unrealistic when something in it could not happen in a real photograph, wrong_materials "
         "when a material is not the one the prompt asks for, wrong_backdrop, busy or off_subject.",
+        "When product photos are given, score product_fidelity from 1 to 5: 5 when the product "
+        "in the photo is the same as in the product photo. Flag product_changed when its shape, "
+        "its shade, its gum colour or its parts differ.",
+        "When product_fidelity in the context is guide, the product may be turned to suit the "
+        "scene: judge its design and its colours, not its angle. Without product photos, leave "
+        "product_fidelity empty.",
         "Say where the subject sits: subject_x is left, centre or right, and subject_y is top, "
         "middle or bottom.",
         "List in calm_areas each of top, bottom, left and right that is plain enough to hold "
@@ -492,7 +506,8 @@ def _prompt_writer_instruction(ctx: ReadonlyContext) -> str:
 
 def _critic_instruction(ctx: ReadonlyContext) -> str:
     """The prompt and the round's context: the photo prompt, the layout, the direction when
-    there is one, the concept and the brand's feel."""
+    there is one, the concept and the brand's feel; and, with product photos (v6 Part B), their
+    notes and the session's fidelity."""
     return f"{CRITIC_PROMPT}\n\n{wrap_context(ROLE_CRITIC, ctx.state['critic_context'])}"
 
 

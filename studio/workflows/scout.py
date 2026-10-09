@@ -61,6 +61,7 @@ from studio.workflows.shared import (
     quoted,
     run_workflow,
     settle,
+    style_references,
     text_message,
     update_session,
 )
@@ -682,7 +683,9 @@ def _directions_context(
             }
             for direction in session.directions
         ]
-    designer = designer_references(store, session.id)
+    # The style references only: product photos (v6 Part B) go to the image model, the prompt
+    # writer and the critic, not to the direction writer.
+    designer = style_references(designer_references(store, session.id))
     if designer:
         context["designer_references"] = designer_reference_context(designer)
     return context

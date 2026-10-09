@@ -42,8 +42,19 @@ from studio.contracts import (
     StudioSession,
 )
 from studio.library.taste import build_taste_profile
+from studio.media import product_photo
 from studio.models import banned_terms, describe_llm
-from studio.photos.base import PhotoUnavailable
+from studio.photos.base import (
+    PRODUCT_UNREADABLE,
+    WORDS_ONLY,
+    LimitReached,
+    PhotoProvider,
+    PhotoUnavailable,
+    fidelity_sentence,
+    too_many_products,
+)
+from studio.photos.catalogue import ImageModel
+from studio.photos.letterbox import trim_letterbox
 from studio.render import allowed_templates
 from studio.store import Store
 from studio.workflows.agents import build_critic, build_critic_ranker, build_prompt_writer
@@ -64,10 +75,16 @@ from studio.workflows.shared import (
     labelled_parts,
     mentions,
     plural,
+    product_photo_context,
+    product_photo_images,
+    product_references,
+    products_sent,
     quality_bar,
     quality_bar_parts,
     run_workflow,
+    session_products,
     settle,
+    style_references,
     trim_prompt,
     update_session,
     with_backdrop,
@@ -87,6 +104,12 @@ _MAX_SEED = 2**31 - 1
 ANSWER_UNUSABLE = "The model's answer could not be used."
 NO_PHOTO_PROVIDER = "No photo provider is configured."
 PHOTO_SERVICE_FAILED = "The photo service failed."
+# The generate_samples step's note (v6): the round's count and its total cost.
+ROUND_MADE = "{made} of {count} made · {cost}"
+NONE_MADE = "0 of {count} made"
+LETTERBOX_TRIMMED = "Trimmed a letterbox off {photos}."
+# v6 Part B: the step's note when the image model received product photos.
+WITH_PRODUCTS = "With {photos}."
 CRITIC_FAILED = "The critic could not score this sample."
 SOURCE_PHOTO_MISSING = "The photo this session started from is no longer available."
 CHOSEN_PHOTO = "The chosen photo."
@@ -125,19 +148,26 @@ async def run_draft(deps: Deps, run: Run, session: StudioSession) -> StudioSessi
 
 
 async def run_samples(
-    deps: Deps, run: Run, session: StudioSession, count: int | None = None
+    deps: Deps,
+    run: Run,
+    session: StudioSession,
+    count: int | None = None,
+    *,
+    compare: list[str] | None = None,
 ) -> list[Sample]:
     """Make a round of sample photos from the current prompt, have the critic score each one,
     and rank them against each other.
 
     `count`, when given, is the round's size in place of the session's sample count; either
-    way it is held to the most photos one round may ask for. Returns the round's samples,
-    failed ones included with their reason, or an empty list when the run failed. A stopped
-    run keeps the samples that finished as a partial round.
+    way it is held to the most photos one round may ask for. `compare` (v6), when given, names
+    the models of a compare round: one photo from each, from the same prompt version, ranked
+    together; the round's size is then the number of models, and the session keeps its own
+    model. Returns the round's samples, failed ones included with their reason, or an empty
+    list when the run failed. A stopped run keeps the samples that finished as a partial round.
     """
 
     async def work() -> list[Sample]:
-        workflow = _samples_workflow(deps, run, session, count)
+        workflow = _samples_workflow(deps, run, session, count, compare)
         state = await run_workflow(workflow, run.id, session.brief)
         return [Sample.model_validate(data) for data in state["samples"]]
 
@@ -175,9 +205,16 @@ def _draft_workflow(deps: Deps, run: Run, session: StudioSession) -> Workflow:
             references = store.list_references()
             taste = build_taste_profile(references)
             source = _source_photo(store, session)
-            # The designer's own pictures of this post come right after the brief (v5).
-            designer = designer_references(store, session.id)
-            designer_images = designer_reference_images(store, designer)
+            # The designer's own pictures of this post come right after the brief (v5): the
+            # product photos first (v6 Part B), each named "Product photo n", then the style
+            # references.
+            session_refs = designer_references(store, session.id)
+            designer = style_references(session_refs)
+            products = product_references(session_refs)
+            designer_images = [
+                *product_photo_images(store, products),
+                *designer_reference_images(store, designer),
+            ]
             if source is None:
                 bar, bar_label = quality_bar(store, kit)
                 images = _draft_images(store, references, bar, designer_images)
@@ -210,12 +247,16 @@ def _draft_workflow(deps: Deps, run: Run, session: StudioSession) -> Workflow:
             # Only a session with references carries them, so one without reads as before.
             if designer:
                 context["designer_references"] = designer_reference_context(designer)
+            # v6 Part B: the photo prompt describes only the scene around these.
+            if products:
+                context["product_photos"] = product_photo_context(products)
             ctx.state["prompt_writer_context"] = context
             ctx.state["prompt_images"] = images
             ctx.state["source_sample"] = source.model_dump(mode="json") if source else None
             liked, disliked = taste.liked_count, taste.disliked_count
             info.note = f"{liked} liked and {disliked} disliked references; {shown}"
             info.note += designer_references_sent(len(designer))
+            info.note += products_sent(len(products))
             if direction is not None:
                 info.note += f' Direction {direction.number}: "{direction.title}".'
             # The prompt writer receives the brief as its message, with the images after it.
@@ -444,7 +485,9 @@ def pick_source_photo(
 # --------------------------------------------------------------------- samples
 
 
-def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int | None) -> Workflow:
+def _samples_workflow(
+    deps: Deps, run: Run, session: StudioSession, count: int | None, compare: list[str] | None = None
+) -> Workflow:
     """load_prompt → generate_samples → review_samples → rank_samples → save_round."""
     store, kit = deps.store, deps.kit
     recorder = StepRecorder(store, run.id)
@@ -454,7 +497,7 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
     async def load_prompt() -> Event:
         async with recorder.step("load_prompt") as info:
             version = current_version(store, session)
-            if deps.photo_provider is None:
+            if not deps.photos.has_photo_source():
                 raise ValueError(NO_PHOTO_PROVIDER)
             info.note = f"Version {version.number}."
             data = version.model_dump(mode="json")
@@ -463,7 +506,7 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
     async def generate_samples(prompt_version: dict[str, Any]) -> Event:
         async with recorder.step("generate_samples") as info:
             version = PromptVersion.model_validate(prompt_version)
-            samples = await _make_samples(deps, session, version, count, info)
+            samples = await _make_samples(deps, session, version, count, info, compare)
             data = [sample.model_dump(mode="json") for sample in samples]
             return Event(output=data, state={"samples": data})
 
@@ -473,13 +516,28 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
         async with recorder.step("review_samples") as info:
             info.provider = describe_llm(deps.llm)
             version = PromptVersion.model_validate(prompt_version)
-            ctx.state["critic_context"] = _critic_context(session, version, kit)
+            context = _critic_context(session, version, kit)
+            # v6 Part B: the critic scores product fidelity against the session's product
+            # photos, which go first in its message, each named "Product photo n".
+            products = session_products(store, session.id)
+            if products:
+                context["product_photos"] = product_photo_context(products)
+                context["product_fidelity"] = session.product_fidelity
+            ctx.state["critic_context"] = context
             round_samples = [Sample.model_validate(item) for item in samples]
             bar, bar_label = quality_bar(store, kit)
             reference_parts = _designer_reference_parts(store, session)
+            product_parts = labelled_parts(product_photo_images(store, products))
             with _kept_if_stopped(store, session, round_samples):
                 await _review_samples(
-                    ctx, critic, store, round_samples, quality_bar_parts(bar), reference_parts, info
+                    ctx,
+                    critic,
+                    store,
+                    round_samples,
+                    quality_bar_parts(bar),
+                    reference_parts,
+                    info,
+                    product_parts=product_parts,
                 )
             info.note = f"{info.note} {QUALITY_BAR_NOTE.format(label=bar_label)}"
             data = [sample.model_dump(mode="json") for sample in round_samples]
@@ -523,53 +581,100 @@ def _samples_workflow(deps: Deps, run: Run, session: StudioSession, count: int |
 
 
 async def _make_samples(
-    deps: Deps, session: StudioSession, version: PromptVersion, count: int | None, info: StepInfo
+    deps: Deps,
+    session: StudioSession,
+    version: PromptVersion,
+    count: int | None,
+    info: StepInfo,
+    compare: list[str] | None = None,
 ) -> list[Sample]:
-    """The round's photos, all asked for at once, each with a seed of its own.
+    """The round's photos from the session's model, each with a seed of its own.
+
+    The registry turns the session's model id into the model and its adapter (v6); a model that
+    can no longer be used gives way to the default, and the step's note says so. At most the
+    model's `max_parallel` photos are asked for at once on its provider, and before each paid
+    photo the registry checks the daily limits: a photo over a limit is not asked for, and its
+    sample carries the limit's message. A letterbox the model painted is trimmed off.
 
     The round holds `count` photos, or the session's sample count when `count` is None, and
-    never more than one round may ask for. The step's note counts the photos as they land. A
-    sample that could not be made is kept with the reason. When none could be made the step
-    fails with the first reason, and no sample is kept. When the run is stopped, the photos
-    still on their way are abandoned and the samples that finished are kept as a partial
-    round.
+    never more than one round may ask for. A compare round (`compare`, the models' ids) holds
+    one photo from each model instead, all asked for at once. The step's note counts the photos
+    as they land, and ends with the round's total cost. A sample that could not be made is kept
+    with the reason. When none could be made the step fails with the first reason, and no
+    sample is kept. When the run is stopped, the photos still on their way are abandoned and
+    the samples that finished are kept as a partial round.
+
+    v6 Part B: the session's product photos are prepared once (an upright PNG of at most 2048
+    pixels, without metadata) and each model is sent as many as it takes, with the fidelity
+    sentence before the prompt; a words-only model gets the words alone. A sample records the
+    product photos its model received, and a line when not all of them reached it.
     """
-    provider = deps.photo_provider  # load_prompt has made sure there is one
-    wanted = count if count is not None else session.sample_count
-    count = max(1, min(wanted, deps.settings.max_samples))
+    registry = deps.photos
+    if compare:
+        chosen = [registry.resolve(model_id) for model_id in compare]
+        models = [resolved.model for resolved in chosen]
+    else:
+        chosen = [registry.resolve(session.photo_model_id)]
+        wanted = count if count is not None else session.sample_count
+        models = [chosen[0].model] * max(1, min(wanted, deps.settings.max_samples))
+    count = len(models)
+    # Each model's adapter and options, once; each provider's parallel limit, once.
+    plans = {
+        model.id: (registry.adapter_for(model.id), registry.options_for(model)) for model in models
+    }
+    gates: dict[str, asyncio.Semaphore] = {}
+    for model in models:
+        gates.setdefault(model.provider, asyncio.Semaphore(model.max_parallel))
     round_number = session.rounds + 1
     prompt = with_backdrop(version.photo_prompt, version.mode, deps.kit, version.layout)
     size = deps.kit.post_size
-    info.provider = provider.name
+    info.provider = ", ".join(
+        dict.fromkeys(registry.describe(model, plans[model.id][1]) for model in models)
+    )
+    trimmed: list[int] = []
+    products, unreadable = await _prepared_products(deps.store, session)
+    sentence = fidelity_sentence(session.product_fidelity)
 
-    async def make(index: int) -> Sample:
+    async def make(index: int, model: ImageModel) -> Sample:
+        adapter, options = plans[model.id]
+        limit = registry.input_limit(model)
+        sent = products[:limit]
+        notes = list(unreadable)
+        if products and not limit:
+            notes.append(WORDS_ONLY)
+        elif len(products) > limit:
+            notes.append(too_many_products(model.label, limit))
         sample = Sample(
             session_id=session.id,
             prompt_version_id=version.id,
             round=round_number,
             index=index,
             seed=random.randint(1, _MAX_SEED),
+            model_id=model.id,
+            product_note=" ".join(notes),
         )
+        # The fidelity sentence goes first, only to a model that sees the product photos.
+        asked = f"{sentence} {prompt}" if sent else prompt
         out_path = deps.store.samples_dir / session.id / f"{round_number}-{index}.png"
-        try:
-            result = await provider.generate(
-                prompt, size.width, size.height, out_path, seed=sample.seed
+        async with gates[model.provider]:
+            photo = await _ask_for_photo(
+                deps,
+                adapter,
+                model,
+                options,
+                sample,
+                asked,
+                (size.width, size.height),
+                out_path,
+                products=sent,
             )
-        except PhotoUnavailable as error:
-            # The message is written for the designer and holds no key, so it is logged in full.
-            logger.warning("Photo %s-%s failed: %s", round_number, index, error)
-            sample.error = str(error).strip() or PHOTO_SERVICE_FAILED
-            return sample
-        except Exception as error:
-            # Only the type: the text of an unexpected error may hold a request address.
-            logger.warning("The photo provider failed with %s", type(error).__name__)
-            sample.error = PHOTO_SERVICE_FAILED
-            return sample
-        sample.image_path = deps.store.relative(Path(result.path))
-        sample.provider = result.provider
+        if photo is not None and await asyncio.to_thread(trim_letterbox, photo):
+            trimmed.append(index)
         return sample
 
-    tasks = [asyncio.create_task(make(index)) for index in range(1, count + 1)]
+    tasks = [
+        asyncio.create_task(make(index, model)) for index, model in enumerate(models, start=1)
+    ]
     landed: list[Sample] = []
     try:
         for next_sample in asyncio.as_completed(tasks):
@@ -584,11 +689,105 @@ async def _make_samples(
         raise
     samples = sorted(landed, key=lambda sample: sample.index)
     made = [sample for sample in samples if sample.image_path]
-    info.provider = made[0].provider if made else provider.name
-    info.note = f"{len(made)} of {plural(count, 'sample')} made."
+    total = (
+        ROUND_MADE.format(made=len(made), count=count, cost=registry.round_cost(made))
+        if made
+        else NONE_MADE.format(count=count)
+    )
+    lines = list(dict.fromkeys(resolved.note for resolved in chosen if resolved.note))
+    if trimmed:
+        lines.append(LETTERBOX_TRIMMED.format(photos=plural(len(trimmed), "photo")))
+    # v6 Part B: what reached the image model of the product photos, once per kind of line.
+    received = max((len(sample.product_reference_ids) for sample in samples), default=0)
+    if received:
+        lines.append(WITH_PRODUCTS.format(photos=plural(received, "product photo")))
+    lines += list(dict.fromkeys(sample.product_note for sample in samples if sample.product_note))
+    info.note = " ".join([*lines, total])
     if not made:
         raise PhotoUnavailable(samples[0].error or PHOTO_SERVICE_FAILED)
     return samples
+
+
+async def _prepared_products(
+    store: Store, session: StudioSession
+) -> tuple[list[tuple[str, Path]], list[str]]:
+    """The session's product photos as the image model is sent them (v6 Part B): each one's
+    reference id and its PNG copy, in their order; and a line for each one that could not be
+    read or converted, which is left out while the round goes on."""
+    prepared: list[tuple[str, Path]] = []
+    notes: list[str] = []
+    for number, reference in enumerate(session_products(store, session.id), start=1):
+        try:
+            path = await asyncio.to_thread(product_photo, store, reference.image_path)
+        except Exception as error:
+            # Only the type: Pillow's and the disk's errors alike.
+            logger.warning("A product photo could not be prepared: %s", type(error).__name__)
+            notes.append(PRODUCT_UNREADABLE.format(number=number))
+            continue
+        prepared.append((reference.id, path))
+    return prepared, notes
+
+
+async def _ask_for_photo(
+    deps: Deps,
+    adapter: PhotoProvider,
+    model: ImageModel,
+    options: dict[str, str],
+    sample: Sample,
+    prompt: str,
+    size: tuple[int, int],
+    out_path: Path,
+    *,
+    products: list[tuple[str, Path]] | None = None,
+) -> Path | None:
+    """Ask the model for the sample's photo and fill the sample in: its photo, provider and
+    cost, or the reason it has none. Returns the photo's file, or None.
+
+    A paid photo over a daily limit is not asked for. The registry counts a paid photo from
+    the moment it is asked for, so photos asked for at once cannot together pass a limit.
+    `products` (v6 Part B) are the product photos the model is sent, each with its reference
+    id; the sample records those the model received.
+    """
+    registry = deps.photos
+    products = products or []
+    try:
+        registry.hold(sample, model, options, len(products))
+    except LimitReached as error:
+        sample.error = str(error)
+        return None
+    try:
+        result = await adapter.generate(
+            prompt,
+            size[0],
+            size[1],
+            out_path,
+            model=model,
+            options=options,
+            seed=sample.seed,
+            images=[path for _, path in products],
+        )
+    except PhotoUnavailable as error:
+        # Written for the designer, and every known key is taken out before it is kept.
+        message = registry.redact(str(error)).strip()
+        logger.warning("Photo %s-%s failed: %s", sample.round, sample.index, message)
+        sample.error = message or PHOTO_SERVICE_FAILED
+        return None
+    except Exception as error:
+        # Only the type: the text of an unexpected error may hold a request address.
+        logger.warning("The photo provider failed with %s", type(error).__name__)
+        sample.error = PHOTO_SERVICE_FAILED
+        return None
+    else:
+        photo = Path(result.path)
+        sample.image_path = deps.store.relative(photo)
+        sample.provider = result.provider
+        sample.cost_usd = result.cost_usd
+        sample.cost_basis = result.cost_basis
+        # As many as the adapter says it sent: "With 1 product photo" on the card.
+        sample.product_reference_ids = [ref_id for ref_id, _ in products][: result.input_images]
+        return photo
+    finally:
+        registry.record(sample)
 
 
 def _made(samples: list[Sample]) -> int:
@@ -638,10 +837,13 @@ def _critic_context(
 
 def _designer_reference_parts(store: Store, session: StudioSession) -> list[types.Part]:
     """What follows the quality bar in a critic's message (v5): the designer's first three
-    references, each image (its agent copy, as the prompt writer gets) after the line naming
-    it, numbered as the prompt writer saw them. Empty for a session without references."""
-    references = designer_references(store, session.id)[:_CRITIC_DESIGNER_REFERENCES]
-    return labelled_parts(designer_reference_images(store, references))
+    style references, each image (its agent copy, as the prompt writer gets) after the line
+    naming it, numbered as the prompt writer saw them. Empty for a session without references.
+    The product photos (v6 Part B) go first in the message instead."""
+    references = style_references(designer_references(store, session.id))
+    return labelled_parts(
+        designer_reference_images(store, references[:_CRITIC_DESIGNER_REFERENCES])
+    )
 
 
 def _layouts_for(session: StudioSession, kit: BrandKit) -> list[LayoutTemplate]:
@@ -662,23 +864,33 @@ async def _review_samples(
     bar_parts: list[types.Part],
     reference_parts: list[types.Part],
     info: StepInfo,
+    *,
+    product_parts: list[types.Part] | None = None,
 ) -> None:
     """Give each sample with a photo the critic's review, at most three at a time, and
     recommend the one its scores put first; the ranking may move the recommendation later.
     A sample the critic cannot score keeps the reason instead.
 
     Each photo goes with the quality bar (`bar_parts`) and, after it, the designer's
-    references (`reference_parts`, v5); either may be empty.
+    references (`reference_parts`, v5); either may be empty. The session's product photos
+    (`product_parts`, v6 Part B) go before the photo, and the critic scores product fidelity
+    against them; without any, code drops a fidelity score and a `product_changed` flag, which
+    would be about nothing.
     """
     limit = asyncio.Semaphore(_CRITICS_AT_ONCE)
     guide_parts = [*bar_parts, *reference_parts]
+    product_parts = product_parts or []
 
     async def review(sample: Sample) -> float:
         async with limit:
             started = time.monotonic()
             try:
                 image = store.media_path(sample.image_path)
-                sample.review = await _ask_critic(ctx, critic, image, guide_parts)
+                answer = await _ask_critic(ctx, critic, image, guide_parts, product_parts)
+                if not product_parts:
+                    flags = [flag for flag in answer.flags if flag != "product_changed"]
+                    answer = answer.model_copy(update={"product_fidelity": None, "flags": flags})
+                sample.review = answer
             except Exception as error:
                 logger.warning("The critic could not score a sample: %s", type(error).__name__)
                 sample.review_error = CRITIC_FAILED
@@ -694,11 +906,21 @@ async def _review_samples(
 
 
 async def _ask_critic(
-    ctx: Context, critic: LlmAgent, image: Path, guide_parts: list[types.Part]
+    ctx: Context,
+    critic: LlmAgent,
+    image: Path,
+    guide_parts: list[types.Part],
+    product_parts: list[types.Part] | None = None,
 ) -> SampleReview:
     """The critic's review of one sample photo, held to the brand's quality bar and the
-    designer's references, which `guide_parts` holds after the photo, each named."""
-    parts = [image_part(image), types.Part(text=JUDGE_THIS_SAMPLE), *guide_parts]
+    designer's references, which `guide_parts` holds after the photo, each named. The product
+    photos (`product_parts`, v6 Part B), each named, come first in the message."""
+    parts = [
+        *(product_parts or []),
+        image_part(image),
+        types.Part(text=JUDGE_THIS_SAMPLE),
+        *guide_parts,
+    ]
     # Each call runs on a branch of its own, so calls made at the same time never see
     # each other's photo or answer.
     answer = await ctx.run_node(
@@ -823,7 +1045,9 @@ def _revise_prompt_workflow(deps: Deps, run: Run, session: StudioSession) -> Wor
         async with recorder.step("load_feedback") as info:
             current = current_version(store, session)
             feedback = _feedback(store, session, current)
-            designer = designer_references(store, session.id)
+            session_refs = designer_references(store, session.id)
+            designer = style_references(session_refs)
+            products = product_references(session_refs)
             context: dict[str, Any] = {
                 "task": "revise",
                 "brief": session.brief,
@@ -838,13 +1062,20 @@ def _revise_prompt_workflow(deps: Deps, run: Run, session: StudioSession) -> Wor
             # Only a session with references carries them, so one without reads as before (v5).
             if designer:
                 context["designer_references"] = designer_reference_context(designer)
+            # v6 Part B: the revised photo prompt still describes only the scene around these.
+            if products:
+                context["product_photos"] = product_photo_context(products)
             ctx.state["prompt_writer_context"] = context
-            ctx.state["prompt_images"] = designer_reference_images(store, designer)
+            ctx.state["prompt_images"] = [
+                *product_photo_images(store, products),
+                *designer_reference_images(store, designer),
+            ]
             ctx.state["banned"] = _banned(feedback)
             comment = "a comment" if feedback["round_comment"] else "no comment"
             reactions = len(feedback["reactions"])
             info.note = f"{reactions} reactions and {comment} on round {session.rounds}."
             info.note += designer_references_sent(len(designer))
+            info.note += products_sent(len(products))
             # The prompt writer receives the brief as its message, with the references after it.
             return session.brief
 

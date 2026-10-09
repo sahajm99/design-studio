@@ -16,6 +16,7 @@
 <div hidden>
   <form id="delete-disliked-form" method="post" action="/archive/delete-disliked">
     <input type="hidden" name="filter" value="{{ active_filter }}" />
+    {% if active_model is defined and active_model %}<input type="hidden" name="model" value="{{ active_model }}" />{% endif %}
   </form>
   {% for row in rows %}
   <form id="start-{{ row.sample.id }}" method="post" action="/archive/{{ row.sample.id }}/start"></form>
@@ -26,12 +27,24 @@
 
 <form id="delete-selected-form" method="post" action="/archive/delete">
   <input type="hidden" name="filter" value="{{ active_filter }}" />
+  {% if active_model is defined and active_model %}<input type="hidden" name="model" value="{{ active_model }}" />{% endif %}
   <section class="panel">
     <div class="archive-toolbar">
-      <div class="filter-bar" role="group" aria-label="Filter the archive">
-        {% for filter in filters %}
-        <a class="filter-btn {{ 'is-active' if filter.name == active_filter else '' }}" href="/archive?filter={{ filter.name }}"{% if filter.name == active_filter %} aria-current="page"{% endif %}>{{ filter.label }}</a>
-        {% endfor %}
+      <div class="archive-filters">
+        <div class="filter-bar" role="group" aria-label="Filter the archive">
+          {% for filter in filters %}
+          <a class="filter-btn {{ 'is-active' if filter.name == active_filter else '' }}" href="{{ filter.href if filter.href is defined else '/archive?filter=' ~ filter.name }}"{% if filter.name == active_filter %} aria-current="page"{% endif %}>{{ filter.label }}</a>
+          {% endfor %}
+        </div>
+        {#- v6: the Model filter, all and each model that made a photo here. #}
+        {% if model_filters is defined and model_filters|length > 1 %}
+        <div class="filter-bar model-filter" role="group" aria-labelledby="model-filter-label">
+          <span class="filter-label" id="model-filter-label">Model</span>
+          {% for option in model_filters %}
+          <a class="filter-btn {{ 'is-active' if option.id == active_model else '' }}" href="{{ option.href }}"{% if option.id == active_model %} aria-current="true"{% endif %}>{{ option.label }}</a>
+          {% endfor %}
+        </div>
+        {% endif %}
       </div>
       <div class="actions">
         <button type="submit" class="btn btn-small btn-danger-soft" data-confirm-selected>Delete selected</button>
@@ -58,6 +71,8 @@
           <p class="archive-meta">
             <a href="/sessions/{{ row.sample.session_id }}">Session</a> · round {{ row.sample.round }}
           </p>
+          {#- v6: the model that made the photo and its cost; none for uploads and old photos. #}
+          {% if row.badge is defined and row.badge %}<p class="badge sample-model">{{ row.badge }}</p>{% endif %}
           <p class="archive-prompt">
             {% if row.sample.provider == "upload" %}
             Uploaded photo
