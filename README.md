@@ -10,19 +10,34 @@ it runs end to end on stand-in models.
 
 ![A finished post](docs/screenshots/03-post.png)
 
-## Run it
+## Run it on your computer
 
-You need Docker Desktop. Nothing else is installed on your machine.
+The same steps work on Windows, macOS and Linux. Nothing is installed on your machine except
+Docker Desktop; everything else runs inside a container.
 
-```
-git clone <this repository>
-cd design-studio
-docker compose up
-```
+1. **Install Docker Desktop** from https://www.docker.com/products/docker-desktop/ and start
+   it. On Windows its installer sets up WSL 2 for you. Wait until the whale icon says the
+   engine is running.
+2. **Get the code.** Either run `git clone https://github.com/sahajm99/design-studio.git`, or
+   on the GitHub page press "Code", then "Download ZIP", and unzip it.
+3. **Open a terminal in that folder** (the one that holds `docker-compose.yml`): PowerShell or
+   Terminal on Windows, Terminal on a Mac. Run:
 
-Open http://localhost:8000. The first start builds the image, which takes a few minutes because
-it pulls the Playwright base image that renders the posts. With no `.env` file the studio runs in
-demo mode: stand-in agents, stand-in photos and stand-in search, every page working.
+   ```
+   docker compose up
+   ```
+
+4. **Wait for the first build.** It downloads about 2 GB (the browser that renders the posts
+   lives in the image), 5 to 10 minutes on an ordinary connection; later starts take seconds.
+   When the log shows `Uvicorn running on http://0.0.0.0:8000`, open http://localhost:8000.
+5. **Use it.** With no keys the studio is in demo mode: every page works, and the agents, the
+   photos and the search are stand-ins. For real models, see "Real mode" below.
+6. **Stop it** with Ctrl+C in that terminal, or `docker compose down` from another one. Your
+   posts, photos and settings stay on disk (the `data` folder and a Docker volume), so the next
+   start finds everything again.
+
+The studio answers only on the computer it runs on, at localhost. That is on purpose: a button
+can spend money once a paid key is saved.
 
 ### Real mode: three free keys
 
@@ -44,13 +59,31 @@ shows its price before you spend, every photo records what it cost, and the dail
 runaway. Google's image models need billing on the Google project behind the key, so use a
 project of its own and the free text key stays free.
 
-After editing `.env`, recreate the container so it reads the file:
+**Setting the keys.** Copy `.env.example` to `.env` in the same folder as `docker-compose.yml`
+(in PowerShell: `copy .env.example .env`), open it in any text editor, and paste each key after
+its `=` with no quotes. Then recreate the container so it reads the file:
 
 ```
 docker compose up -d --force-recreate
 ```
 
-`.env` is ignored by git. Never commit it.
+`.env` is ignored by git. Never commit it, and never paste a key anywhere else.
+
+### If something goes wrong
+
+- **"port is already allocated"**: another program is using port 8000. In `docker-compose.yml`
+  change `127.0.0.1:8000:8000` to `127.0.0.1:8001:8000`, start again, and open
+  http://localhost:8001.
+- **"Cannot connect to the Docker daemon"**: Docker Desktop is not running yet. Start it and
+  wait for the engine.
+- **The page still says "Demo mode" after you set keys**: the container started before `.env`
+  existed. Run `docker compose up -d --force-recreate`.
+- **"Cloudflare's free daily allowance is used up"**: the free photo model allows roughly 40 to
+  70 photos a day. Wait for the next day (UTC) or choose a paid model on the Settings page.
+- **A clean slate**: `docker compose down -v` removes the database volume; delete the `data`
+  folder to remove the photos and posts.
+- **Logs**: `docker compose logs -f studio` shows what the studio is doing; the Runs page shows
+  every step of every run.
 
 ### Tests
 
@@ -93,6 +126,8 @@ rejects something becomes a banned term the reviser cannot bring back. A model p
 one photo per chosen model from the same prompt and ranks them together. A reference marked
 "Product" goes to the image model itself, which keeps the product and makes a new scene around
 it, and the critic scores how true the product stayed.
+
+![A session with a product photo, generated on GPT Image](docs/screenshots/09-product-session.png)
 
 ### 4. Layouts and the final check
 
@@ -139,6 +174,8 @@ their parent. When something goes wrong, this page says where.
 ![An automatic run](docs/screenshots/07-run.png)
 
 ### 9. Settings
+
+![The Settings page](docs/screenshots/08-settings.png)
 
 Image models and your keys: one card per provider with its key, a free "Test key", the models
 to offer with their prices and presets, the default model, the daily photo and spend limits,
