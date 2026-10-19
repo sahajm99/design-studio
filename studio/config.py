@@ -5,6 +5,10 @@ too). A saved key wins over the same key in `.env`; the fields here keep what `.
 and `key_in_use` answers with the saved key when there is one. The photo registry hands the
 saved keys over at start-up and whenever they change, so demo mode, research and photos
 follow a key saved on the page without a restart.
+
+v7 hosting: `STUDIO_PUBLIC_HOST` and `STUDIO_PASSCODE` let the studio run on a server for
+someone else, behind an HTTPS proxy and a passcode; `hosting_problem` stops a start that would
+put it online without one.
 """
 
 from __future__ import annotations
@@ -14,10 +18,22 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr
 
 PhotoMode = Literal["cloudflare", "fake", "none"]
 ResearchMode = Literal["tavily", "fake", "none"]
+
+# v7 hosting: the shortest passcode the studio accepts, and why it will not start.
+MIN_PASSCODE_CHARS = 12
+NO_PASSCODE = (
+    "STUDIO_PUBLIC_HOST is set but STUDIO_PASSCODE is not: the studio will not answer on a "
+    "public address without a passcode."
+)
+SHORT_PASSCODE = f"STUDIO_PASSCODE must be at least {MIN_PASSCODE_CHARS} characters."
+BAD_PUBLIC_HOST = (
+    "STUDIO_PUBLIC_HOST is a host name only, with no scheme, port or path, such as "
+    "34-74-245-181.sslip.io."
+)
 
 
 class Settings(BaseModel):
@@ -51,6 +67,12 @@ class Settings(BaseModel):
     tavily_api_key: str = ""
     research_provider: Literal["auto", "tavily", "fake", "none"] = "auto"
     research_monthly_limit: int = 900  # search credits the studio will spend in a month
+
+    # v7 hosting, both empty on the designer's own computer: the host name the studio also
+    # answers to behind an HTTPS proxy, and the passcode every visitor must enter. The passcode
+    # is kept out of the settings' repr.
+    public_host: str = ""
+    passcode: str = Field(default="", repr=False)
 
     # v7: the keys saved on the Settings page, by field name, set by the photo registry.
     _saved_keys: dict[str, str] = PrivateAttr(default_factory=dict)
@@ -115,4 +137,19 @@ class Settings(BaseModel):
             tavily_api_key=get("TAVILY_API_KEY"),
             research_provider=get("STUDIO_RESEARCH_PROVIDER", "auto"),  # type: ignore[arg-type]
             research_monthly_limit=int(get("STUDIO_RESEARCH_MONTHLY_LIMIT", "900")),
+            public_host=get("STUDIO_PUBLIC_HOST").lower(),
+            passcode=get("STUDIO_PASSCODE"),
         )
+
+    def hosting_problem(self) -> str:
+        """Why the studio must not start as configured for hosting (v7), or "" when it may: a
+        public host needs a passcode, a passcode needs 12 characters or more, and a public host
+        is a bare host name. On the designer's own computer both are empty and all is well."""
+        host = self.public_host
+        if host and any(mark in host for mark in ("/", ":", "@", " ")):
+            return BAD_PUBLIC_HOST
+        if host and not self.passcode:
+            return NO_PASSCODE
+        if self.passcode and len(self.passcode) < MIN_PASSCODE_CHARS:
+            return SHORT_PASSCODE
+        return ""

@@ -31,7 +31,7 @@ from studio.render import Renderer
 from studio.research import get_search_provider
 from studio.secrets import load_secret
 from studio.store import Store
-from studio.web.guard import LocalOnlyGuard
+from studio.web.guard import LocalOnlyGuard, PasscodeGate, WrongPasscodes, pass_key
 from studio.web.jobs import RunJobs
 from studio.web.routes import router
 from studio.workflows import Deps, analyse_reference
@@ -45,6 +45,11 @@ _QUIET_LOGGERS = ("httpx", "httpcore")
 _SESSION_SCAN_LIMIT = 10_000
 # The last decision line of an auto run that the restart cut off.
 _RESTARTED = "Stopped: The studio restarted while this run was in progress."
+# v7 hosting: why a studio with a passcode will not start without its secret.
+_NO_PASS_SECRET = (
+    "STUDIO_PASSCODE is set, but the studio has no secret to sign the sign-in cookie with. "
+    "Fix STUDIO_SECRET_KEY, or let the studio write its secret in the database volume."
+)
 
 
 def _pacing(settings: Settings) -> Callable[[float], Awaitable[None]]:
@@ -88,8 +93,12 @@ def _clear_interrupted_sessions(store: Store) -> None:
 
 
 def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None = None) -> FastAPI:
-    """Build the studio's FastAPI app. Nothing heavy happens until the lifespan runs."""
+    """Build the studio's FastAPI app. Nothing heavy happens until the lifespan runs. v7: a
+    hosting set-up that would put the studio online without a passcode stops it here."""
     settings = settings or Settings.from_env()
+    problem = settings.hosting_problem()
+    if problem:
+        raise RuntimeError(problem)
     fetcher = fetcher or HttpImageFetcher()
 
     @asynccontextmanager
@@ -100,10 +109,17 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
         _clear_interrupted_sessions(store)
 
         kit = load_brand_kit(settings.brands_dir, settings.brand_id)
+        secret = load_secret(settings)
+        # v7 hosting: the passcode gate signs its cookie with a key derived from the secret, so
+        # without a secret the studio does not start rather than start with the gate open.
+        if settings.passcode and secret is None:
+            raise RuntimeError(_NO_PASS_SECRET)
+        app.state.pass_key = pass_key(secret) if settings.passcode and secret else None
+        app.state.wrong_passcodes = WrongPasscodes()
         # v6: every image model, from the catalogue, with the keys from .env and the saved ones.
         # v7: built first, since it hands the saved keys to the settings, the agents' and the
         # search's included, which the model and the search provider below are built with.
-        photos = PhotoRegistry(load_catalogue(), settings, store, secret=load_secret(settings))
+        photos = PhotoRegistry(load_catalogue(), settings, store, secret=secret)
         llm = get_llm(settings)
         # A custom layout's image blocks and an uploaded logo must be files in the uploads folder.
         renderer = Renderer(store.work_dir, uploads_root=store.uploads_dir)
@@ -147,8 +163,17 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
         logging.getLogger(name).setLevel(logging.WARNING)
 
     app = FastAPI(title="Design Studio", lifespan=lifespan)
+    # v7 hosting: the passcode gate, behind the Host and Origin checks (the middleware added
+    # last runs first). Without a passcode it lets everything through. Keep this order:
+    # swapped, a request with a foreign Host or Origin would reach the gate first.
+    app.add_middleware(
+        PasscodeGate, passcode=settings.passcode, public_host=settings.public_host
+    )
     # v6: only this computer's names, and only the studio's own pages may change things.
-    app.add_middleware(LocalOnlyGuard)
+    # v7: and the public host, on a server; with no passcode, nothing through a proxy.
+    app.add_middleware(
+        LocalOnlyGuard, public_host=settings.public_host, gated=bool(settings.passcode)
+    )
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(router)
     return app

@@ -471,8 +471,10 @@ time {
   }
 }
 
-/* The theme toggle: a round ghost button at the bar's right end, after the items. */
-.theme-toggle {
+/* The theme toggle: a round ghost button at the bar's right end, after the items. v7: Sign
+   out, while the passcode gate is on, is drawn the same way, after it. */
+.theme-toggle,
+.bar-icon-button {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -488,9 +490,16 @@ time {
   transition: color 150ms var(--ease-glass), background-color 150ms var(--ease-glass);
 }
 
-.theme-toggle:hover {
+.theme-toggle:hover,
+.bar-icon-button:hover {
   background: var(--glass-hover);
   color: var(--ink);
+}
+
+.bar-signout {
+  display: flex;
+  flex: none;
+  margin: 0;
 }
 
 /* The phone's tab bar: glass floating 12px above the bottom, clear of the safe area. */
@@ -4211,6 +4220,24 @@ details.panel[open] > summary {
 .products-option-rights {
   color: var(--ink-soft);
   font-size: 12.5px;
+}
+
+/* ------------------------------------------------------------------ sign in (v7) */
+
+/* The passcode page: one narrow panel, a little below the bar. */
+.signin-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 440px;
+  margin: 6vh auto 0;
+}
+
+.signin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 /* --------------------------------------------------------------------- motion */

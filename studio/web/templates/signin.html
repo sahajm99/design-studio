@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{#- v7 hosting: the passcode page, the only page before signing in. It shows the bar without
+    the studio's pages, and goes on to the page asked for afterwards. #}
+{% set bare_page = true %}
+{% set page_name = "Sign in" %}
+{% block title %}Sign in · Design Studio{% endblock %}
+{% block content %}
+<section class="panel signin-panel" aria-labelledby="signin-title">
+  <h1 class="page-title" id="signin-title">Sign in<span class="page-title-tail">Enter your passcode.</span></h1>
+  <form method="post" action="/signin" class="signin-form" autocomplete="off">
+    <input type="hidden" name="next" value="{{ next_page }}" />
+    <div class="field">
+      <label for="passcode">Passcode</label>
+      <input type="password" id="passcode" name="passcode" autocomplete="current-password" autocapitalize="off" spellcheck="false" required autofocus />
+    </div>
+    {% if error %}<p class="field-error" role="alert">{{ error }}</p>{% endif %}
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Sign in</button>
+    </div>
+    <p class="hint">{{ hint }}</p>
+  </form>
+</section>
+{% endblock %}

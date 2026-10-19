@@ -94,6 +94,27 @@ docker compose up -d --force-recreate
 - **Logs**: `docker compose logs -f studio` shows what the studio is doing; the Runs page shows
   every step of every run.
 
+### Hosting it for someone else (optional)
+
+The studio can also run on a server, behind a passcode. Keep the port bound to 127.0.0.1 as
+`docker-compose.yml` has it, put an HTTPS proxy on the same machine in front of it (Caddy:
+`your.host.name { reverse_proxy 127.0.0.1:8000 }`), and set two lines in the server's `.env`:
+
+```
+STUDIO_PUBLIC_HOST=your.host.name
+STUDIO_PASSCODE=a passcode of 12 characters or more
+```
+
+Generate the passcode rather than choosing one: `openssl rand -base64 15` on the server prints
+20 random characters. Wrong tries are slowed per address, so its randomness is what holds off
+guessing from many addresses at once.
+
+Every visitor then meets a passcode page first; the right passcode keeps that browser signed
+in for 30 days, and "Sign out" in the bar forgets it. Changing the passcode signs everyone out,
+and ten wrong passcodes from one address make it wait ten minutes. It is a gate, not accounts:
+everyone with the passcode shares one studio, its sessions, posts and saved keys. The studio
+will not start with a public host and no passcode.
+
 ### Tests
 
 ```

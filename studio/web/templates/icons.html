@@ -1,7 +1,8 @@
 {#- Line icons, as the Hybridge design system draws them: a 20 unit box, stroke 1.6, round
     caps and joins, in currentColor. Each means one thing everywhere: the six pages (18px
     in the bar, 20px in the tab bar; Settings is a gear, v6), the like and dislike marks
-    (14 to 16px inline), and the theme toggle's moon and sun (18px in the bar). -#}
+    (14 to 16px inline), and the theme toggle's moon and sun (18px in the bar); v7, Sign out's
+    door and arrow (18px in the bar, while the passcode gate is on). -#}
 {%- macro icon(name, size=18) -%}
 {%- set paths = {
   "studio": "M10 17.5 5.2 9.6 7.4 4.2h5.2l2.2 5.4L10 17.5Zm0 0v-5.9M7.6 2.5h4.8M10 9.2a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Z",
@@ -14,6 +15,7 @@
   "cross": "M5.5 5.5l9 9m0-9-9 9",
   "moon": "M17 10.62A7 7 0 1 1 9.38 3a5.44 5.44 0 0 0 7.62 7.62Z",
   "sun": "M10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM10 3v1.75M10 15.25V17M3 10h1.75M15.25 10H17M5.05 5.05l1.24 1.24M13.71 13.71l1.24 1.24M5.05 14.95l1.24-1.24M13.71 6.29l1.24-1.24",
+  "signout": "M8 3.5H5A1.5 1.5 0 0 0 3.5 5v10A1.5 1.5 0 0 0 5 16.5h3M12.5 13.5 16 10l-3.5-3.5M16 10H8",
 } -%}
 <svg class="icon" width="{{ size }}" height="{{ size }}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="{{ paths[name] }}" /></svg>
 {%- endmacro %}

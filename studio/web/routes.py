@@ -107,6 +107,20 @@ from studio.render.faces import Face
 from studio.research import TavilySearchProvider, get_search_provider
 from studio.secrets import KEYS_UNREADABLE, NO_SECRET, ProviderKeys, SecretUnavailable, redact
 from studio.store import Store
+from studio.web.guard import (
+    PASS_DAYS,
+    PASS_SECONDS,
+    SIGN_IN_PATH,
+    SIGN_OUT_PATH,
+    WrongPasscodes,
+    client_address,
+    issue_pass,
+    local_address,
+    pass_cookie_name,
+    pass_is_valid,
+    passcode_matches,
+    served_over_https,
+)
 from studio.web.jobs import RunJobs
 from studio.web.uploads import (
     MAX_UPLOAD_BYTES,
@@ -183,6 +197,10 @@ _SETTINGS_DEMO = "Demo mode: no model is called. Save a Gemini key below for the
 # v7: the first panel, which shows the alerts about saved keys; a key that could not be saved
 # for want of a secret, on any card, brings the designer back there.
 _KEYS_PANEL = "keys"
+# v7 hosting: the passcode page's lines.
+_SIGN_IN_WRONG = "That passcode isn't right."
+_SIGN_IN_WAIT = "Too many wrong passcodes. Try again in a few minutes."
+_SIGN_IN_HINT = f"You stay signed in on this browser for {PASS_DAYS} days."
 # A provider card's status pill, and the tone it is drawn in (colour only for an outcome).
 _STATUS_FREE = "Free"
 _STATUS_READY = "Ready"
@@ -202,10 +220,14 @@ _USAGE_NOTE = (
     "Your provider's billing page is the record."
 )
 _ABOUT_KEYS = (
-    "Saved keys are encrypted on this machine and never shown again. "
+    "Saved keys are encrypted where the studio runs and never shown again. "
     "Only the last four characters are kept in view. A key saved here wins over the same key "
-    "in .env, from the next step on. The studio answers only on this computer."
+    "in .env, from the next step on."
 )
+# The note's last line: where the studio answers, on this computer or, hosted (v7), on its
+# public address behind the passcode.
+_ABOUT_LOCAL = "The studio answers only on this computer."
+_ABOUT_HOSTED = "The studio answers at {host}, only past its passcode."
 _SETTINGS_SAVED = "Saved."
 _SETTINGS_REMOVED = "Removed."
 # Follows a failed check of a key typed and not saved yet: "Test key" saves a typed key only
@@ -514,6 +536,8 @@ def _base_context(request: Request) -> dict[str, Any]:
     return {
         "brand_name": deps.kit.name,
         "demo_mode": deps.settings.demo_mode,
+        # v7 hosting: Sign out, in the bar, while the passcode gate is on.
+        "passcode_gate": bool(deps.settings.passcode),
         "has_photo_source": deps.photos.has_photo_source(),
         "chrome_tokens": chrome_tokens(deps.kit),
         # The kit's family, served by /brand/font; its italic file is optional.
@@ -868,6 +892,11 @@ def _usage_rows(deps: Deps) -> list[dict[str, Any]]:
     ]
 
 
+def _about_where(public_host: str) -> str:
+    """The note on keys' last line: on this computer only, or at the public host (v7)."""
+    return _ABOUT_HOSTED.format(host=public_host) if public_host else _ABOUT_LOCAL
+
+
 def _key_label(provider: str) -> str:
     """A key card's name: "Gemini" and "Tavily" (v7), or the image provider's."""
     return _SERVICE_LABELS.get(provider) or PROVIDER_LABELS[provider]
@@ -952,7 +981,7 @@ def _settings_context(
         "limits_saved": _SETTINGS_SAVED if saved == "limits" else "",
         "usage_rows": _usage_rows(deps),
         "usage_note": _USAGE_NOTE,
-        "about_keys": _ABOUT_KEYS,
+        "about_keys": f"{_ABOUT_KEYS} {_about_where(deps.settings.public_host)}",
     }
 
 
@@ -2386,6 +2415,84 @@ def _reference_note(value: str) -> str:
 @router.get("/")
 async def index() -> RedirectResponse:
     return RedirectResponse(url="/studio")
+
+
+# ------------------------------------------------------------ the passcode gate (v7)
+
+
+def _sign_in_page(
+    request: Request, next_page: str, *, error: str = "", status_code: int = 200
+) -> Response:
+    """The passcode page, with the page to go on to afterwards and the line a failed try left."""
+    context = {"next_page": local_address(next_page), "error": error, "hint": _SIGN_IN_HINT}
+    return _page(request, "signin.html", context, status_code=status_code)
+
+
+def _signed_in(request: Request, passcode: str) -> bool:
+    key = getattr(request.app.state, "pass_key", None)
+    cookie = pass_cookie_name(request.app.state.deps.settings.public_host)
+    token = request.cookies.get(cookie, "")
+    return key is not None and pass_is_valid(token, key, passcode)
+
+
+@router.get(SIGN_IN_PATH)
+async def sign_in_page(
+    request: Request, next_page: Annotated[str, Query(alias="next")] = ""
+) -> Response:
+    """The passcode page (v7). With no passcode set, or once signed in, it goes straight on."""
+    passcode = request.app.state.deps.settings.passcode
+    if not passcode or _signed_in(request, passcode):
+        return RedirectResponse(local_address(next_page), status_code=303)
+    return _sign_in_page(request, next_page)
+
+
+@router.post(SIGN_IN_PATH)
+async def sign_in(
+    request: Request,
+    passcode: Annotated[str, Form()] = "",
+    next_page: Annotated[str, Form(alias="next")] = "",
+) -> Response:
+    """Check the typed passcode and, when it is right, give this browser the sign-in cookie for
+    30 days and go on to the page asked for. Ten wrong passcodes from one address within ten
+    minutes, and that address waits; the passcode is never logged or sent back."""
+    settings = request.app.state.deps.settings
+    if not settings.passcode:
+        return RedirectResponse(local_address(next_page), status_code=303)
+    wrong: WrongPasscodes = request.app.state.wrong_passcodes
+    address = client_address(request)
+    if wrong.must_wait(address):
+        return _sign_in_page(request, next_page, error=_SIGN_IN_WAIT, status_code=429)
+    if not passcode_matches(passcode, settings.passcode):
+        wrong.add(address)
+        logger.warning("A wrong passcode came from %s.", address or "an unknown address")
+        return _sign_in_page(request, next_page, error=_SIGN_IN_WRONG, status_code=401)
+    wrong.clear(address)
+    response = RedirectResponse(local_address(next_page), status_code=303)
+    response.set_cookie(
+        pass_cookie_name(settings.public_host),
+        issue_pass(request.app.state.pass_key, settings.passcode),
+        max_age=PASS_SECONDS,
+        path="/",
+        secure=served_over_https(request, settings.public_host),
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@router.post(SIGN_OUT_PATH)
+async def sign_out(request: Request) -> Response:
+    """Forget this browser's sign-in cookie and show the passcode page again."""
+    settings = request.app.state.deps.settings
+    response = RedirectResponse(SIGN_IN_PATH, status_code=303)
+    response.delete_cookie(
+        pass_cookie_name(settings.public_host),
+        path="/",
+        secure=served_over_https(request, settings.public_host),
+        httponly=True,
+        samesite="lax",
+    )
+    return response
 
 
 @router.get("/studio")

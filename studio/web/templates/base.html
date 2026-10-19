@@ -75,21 +75,30 @@
           <span class="bar-name">{{ brand_name }} Design Studio</span>
         </a>
         {% if page_name %}<span class="bar-page" aria-hidden="true">{{ page_name }}</span>{% endif %}
+        {#- v7: a bare page (the passcode page) shows the bar without the studio's pages. #}
+        {% if not bare_page %}
         <nav class="bar-nav" aria-label="Main">
           {%- for key, href, label in nav %}
           <a class="bar-item{{ ' glass-pill' if key == active_page else '' }}" href="{{ href }}"{% if key == active_page %} aria-current="page"{% endif %}>{{ icons.icon(key, 18) }}<span>{{ label }}</span></a>
           {%- endfor %}
         </nav>
+        {% endif %}
         {#- The theme toggle: a moon in light, a sun in dark. app.js swaps the two and keeps
             the words right for the theme the page shows. #}
         <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to dark" title="Switch to dark">
           <span class="theme-icon" data-theme-icon="light">{{ icons.icon("moon", 18) }}</span>
           <span class="theme-icon" data-theme-icon="dark" hidden>{{ icons.icon("sun", 18) }}</span>
         </button>
+        {#- v7 hosting: Sign out, while the passcode gate is on. #}
+        {% if passcode_gate and not bare_page %}
+        <form method="post" action="/signout" class="bar-signout">
+          <button type="submit" class="bar-icon-button" aria-label="Sign out" title="Sign out">{{ icons.icon("signout", 18) }}</button>
+        </form>
+        {% endif %}
       </div>
     </header>
     <main class="page">
-      {% if demo_mode or not has_photo_source %}
+      {% if not bare_page and (demo_mode or not has_photo_source) %}
       <div class="banner-stack">
         {% if demo_mode %}
         {#- A page may say what demo mode means for it (v6: the Settings page's line). #}
@@ -102,6 +111,7 @@
       {% endif %}
       {% block content %}{% endblock %}
     </main>
+    {% if not bare_page %}
     <nav class="glass tab-bar" aria-label="Main">
       <ul>
         {%- for key, href, label in nav %}
@@ -109,6 +119,7 @@
         {%- endfor %}
       </ul>
     </nav>
+    {% endif %}
     <script src="/static/app.js"></script>
   </body>
 </html>
