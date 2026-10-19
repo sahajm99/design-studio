@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -47,9 +47,16 @@ _SESSION_SCAN_LIMIT = 10_000
 _RESTARTED = "Stopped: The studio restarted while this run was in progress."
 
 
-async def _no_pause(seconds: float) -> None:
-    """Used instead of asyncio.sleep in demo mode, so the library analyses at once."""
-    return None
+def _pacing(settings: Settings) -> Callable[[float], Awaitable[None]]:
+    """The library analysis's pause between references: asyncio.sleep, except in demo mode,
+    so the stand-in analyses at once. Asked at each pause (v7), since a key saved on the
+    Settings page can end demo mode while the studio runs."""
+
+    async def pause(seconds: float) -> None:
+        if not settings.demo_mode:
+            await asyncio.sleep(seconds)
+
+    return pause
 
 
 def _clear_interrupted_sessions(store: Store) -> None:
@@ -93,9 +100,11 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
         _clear_interrupted_sessions(store)
 
         kit = load_brand_kit(settings.brands_dir, settings.brand_id)
-        llm = get_llm(settings)
         # v6: every image model, from the catalogue, with the keys from .env and the saved ones.
+        # v7: built first, since it hands the saved keys to the settings, the agents' and the
+        # search's included, which the model and the search provider below are built with.
         photos = PhotoRegistry(load_catalogue(), settings, store, secret=load_secret(settings))
+        llm = get_llm(settings)
         # A custom layout's image blocks and an uploaded logo must be files in the uploads folder.
         renderer = Renderer(store.work_dir, uploads_root=store.uploads_dir)
         await renderer.start()
@@ -113,8 +122,9 @@ def create_app(settings: Settings | None = None, *, fetcher: ImageFetcher | None
         async def analyse(ref: Reference, data: bytes, mime: str) -> StyleCard:
             return await analyse_reference(deps.llm, data, mime, label=ref.label)
 
-        sleep = _no_pause if settings.demo_mode else asyncio.sleep
-        analysis_job = AnalysisJob(store, analyse, per_minute=settings.analyse_per_minute, sleep=sleep)
+        analysis_job = AnalysisJob(
+            store, analyse, per_minute=settings.analyse_per_minute, sleep=_pacing(settings)
+        )
         if store.list_references(status="pending"):
             analysis_job.start()
 

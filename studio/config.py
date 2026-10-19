@@ -1,4 +1,11 @@
-"""Settings, read once from environment variables."""
+"""Settings, read once from environment variables.
+
+Keys can also be saved on the Settings page (v7: every key, the agents' and the search's
+too). A saved key wins over the same key in `.env`; the fields here keep what `.env` said,
+and `key_in_use` answers with the saved key when there is one. The photo registry hands the
+saved keys over at start-up and whenever they change, so demo mode, research and photos
+follow a key saved on the page without a restart.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +14,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 PhotoMode = Literal["cloudflare", "fake", "none"]
 ResearchMode = Literal["tavily", "fake", "none"]
@@ -45,27 +52,40 @@ class Settings(BaseModel):
     research_provider: Literal["auto", "tavily", "fake", "none"] = "auto"
     research_monthly_limit: int = 900  # search credits the studio will spend in a month
 
+    # v7: the keys saved on the Settings page, by field name, set by the photo registry.
+    _saved_keys: dict[str, str] = PrivateAttr(default_factory=dict)
+
+    def use_saved_keys(self, keys: Mapping[str, str]) -> None:
+        """Take the keys saved on the Settings page, by field name; an empty one is not saved."""
+        self._saved_keys = {field: value for field, value in keys.items() if value}
+
+    def key_in_use(self, field: str) -> str:
+        """The key a field stands for, as the studio uses it: the one saved on the Settings
+        page, else the one in `.env`, else ""."""
+        return self._saved_keys.get(field) or getattr(self, field)
+
     @property
     def demo_mode(self) -> bool:
-        """With no model key the studio runs on fake models."""
-        return not self.google_api_key
+        """With no model key, saved or in `.env`, the studio runs on fake models."""
+        return not self.key_in_use("google_api_key")
 
     @property
     def research_mode(self) -> ResearchMode:
         if self.research_provider != "auto":
             return self.research_provider
-        if self.tavily_api_key:
+        if self.key_in_use("tavily_api_key"):
             return "tavily"
         return "fake" if self.demo_mode else "none"
 
     @property
     def photo_mode(self) -> PhotoMode:
         """Who makes the photos, by v5's rule, which v6 keeps: Cloudflare whenever its keys are
-        set, else the stand-in ("fake") in demo mode, else no free source ("none"). The photo
-        registry makes every model's photos with the stand-in only while this is "fake"."""
+        set (saved or in `.env`), else the stand-in ("fake") in demo mode, else no free source
+        ("none"). The photo registry makes every model's photos with the stand-in only while
+        this is "fake"."""
         if self.photo_provider != "auto":
             return self.photo_provider
-        if self.cloudflare_account_id and self.cloudflare_api_token:
+        if self.key_in_use("cloudflare_account_id") and self.key_in_use("cloudflare_api_token"):
             return "cloudflare"
         return "fake" if self.demo_mode else "none"
 

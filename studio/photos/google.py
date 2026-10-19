@@ -172,7 +172,7 @@ class GooglePhotoProvider:
         except PhotoUnavailable as error:
             return KeyCheck(ok=False, message=self._redacted(str(error)))
         if not response.is_success:
-            if _key_refused(response):
+            if key_refused(response):
                 return KeyCheck(ok=False, message=KEY_REFUSED.format(provider=_LABEL))
             message = KEY_CHECK_FAILED.format(provider=_LABEL, status=response.status_code)
             return KeyCheck(ok=False, message=message)
@@ -258,7 +258,7 @@ def _failure_message(
     status = response.status_code
     error = provider_error(response)
     text = error.text
-    if _key_refused(response):
+    if key_refused(response):
         return KEY_REFUSED.format(provider=_LABEL)
     if status == 429 and any(sign in text for sign in _FREE_TIER_SIGNS):
         return GOOGLE_BILLING
@@ -275,7 +275,7 @@ def _failure_message(
     return with_detail(PROVIDER_PROBLEM.format(provider=_LABEL), error.message)
 
 
-def _key_refused(response: httpx.Response) -> bool:
+def key_refused(response: httpx.Response) -> bool:
     """Whether Google refused the key itself: a 401, or its "API key not valid" answer, which
     comes as a 400 or a 403."""
     text = provider_error(response).text

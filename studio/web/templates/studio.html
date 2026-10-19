@@ -68,6 +68,11 @@
       </label>
       {% endif %}
     </div>
+    {% if research_enabled and not research_ready %}
+    {#- v7: no Tavily key, saved or in .env: research still proposes directions, from the
+        brand's occasions, with no web sources. #}
+    <p class="hint research-key-hint">Web research needs a Tavily key: <a href="/settings#tavily">add one in Settings</a>. Without it, directions come from the brand's occasions, with no web sources.</p>
+    {% endif %}
     <div class="studio-settings">
       {#- Shown, and sent, only while Auto is chosen; the script keeps the hint's number true. #}
       <div class="auto-limits" data-auto-limits hidden>

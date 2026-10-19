@@ -3,6 +3,9 @@
 Tavily's free plan gives 1,000 search credits a month with no card; one basic search
 spends one credit. The key goes in the request body, as Tavily's API accepts it, and is
 never put in a message, an exception or a log line.
+
+v7: the Settings page's key check reads the key's usage (`GET /usage`, the key as a bearer
+token), which makes no search; Tavily's documentation gives that endpoint no credit cost.
 """
 
 from __future__ import annotations
@@ -13,9 +16,17 @@ from urllib.parse import urlparse
 import httpx
 
 from studio.contracts import SearchResult
+from studio.photos.base import KEY_CHECK_FAILED, KEY_NOT_SET, KEY_REFUSED, KeyCheck
 from studio.research.base import SearchUnavailable
 
 _URL = "https://api.tavily.com/search"
+_USAGE_URL = "https://api.tavily.com/usage"
+_LABEL = "Tavily"
+# What the key check says when it worked: with the plan's credits when Tavily gives them.
+KEY_WORKS = "The key works."
+KEY_WORKS_CREDITS = "The key works. {used} of {limit} credits used."
+_BUSY = "Tavily is busy. Try again in a minute."
+_UNREACHABLE = "Tavily could not be reached."
 
 
 class TavilySearchProvider:
@@ -71,6 +82,34 @@ class TavilySearchProvider:
             raise SearchUnavailable(f"Tavily returned an error ({response.status_code}).") from None
         return _results(body)[:limit]
 
+    async def test_key(self) -> KeyCheck:
+        """The free key check (v7): the key's usage, no search. Plain words, never the key."""
+        if not self.api_key:
+            return KeyCheck(ok=False, message=KEY_NOT_SET.format(provider=_LABEL))
+        owns_client = self.client is None
+        client = self.client or httpx.AsyncClient()
+        try:
+            response = await client.get(
+                _USAGE_URL,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=self.timeout,
+            )
+        except httpx.RequestError:
+            # A timeout is a RequestError too. Nothing of the request is kept, nor its key.
+            return KeyCheck(ok=False, message=_UNREACHABLE)
+        finally:
+            if owns_client:
+                await client.aclose()
+        status = response.status_code
+        if status in (401, 403):
+            return KeyCheck(ok=False, message=KEY_REFUSED.format(provider=_LABEL))
+        if status == 429:
+            return KeyCheck(ok=False, message=_BUSY)
+        if not response.is_success:
+            message = KEY_CHECK_FAILED.format(provider=_LABEL, status=status)
+            return KeyCheck(ok=False, message=message)
+        return KeyCheck(ok=True, message=_credits_line(response))
+
 
 def _raise_for_status(response: httpx.Response) -> None:
     status = response.status_code
@@ -80,6 +119,33 @@ def _raise_for_status(response: httpx.Response) -> None:
         raise SearchUnavailable("Tavily's free monthly credits are used up.")
     if not response.is_success:
         raise SearchUnavailable(f"Tavily returned an error ({status}).")
+
+
+def _credits_line(response: httpx.Response) -> str:
+    """The key check's line: the plan's credits used of its limit when the usage answer gives
+    both as numbers (the account's plan first, then the key's own limit), else only that the
+    key works."""
+    try:
+        body: Any = response.json()
+    except ValueError:
+        return KEY_WORKS
+    if not isinstance(body, dict):
+        return KEY_WORKS
+    for part, used_field, limit_field in (
+        ("account", "plan_usage", "plan_limit"),
+        ("key", "usage", "limit"),
+    ):
+        block = body.get(part)
+        if not isinstance(block, dict):
+            continue
+        used, limit = block.get(used_field), block.get(limit_field)
+        if _is_count(used) and _is_count(limit):
+            return KEY_WORKS_CREDITS.format(used=f"{used:,.0f}", limit=f"{limit:,.0f}")
+    return KEY_WORKS
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _results(body: Any) -> list[SearchResult]:

@@ -41,7 +41,8 @@ can spend money once a paid key is saved.
 
 ### Real mode: three free keys
 
-Copy `.env.example` to `.env` and fill in what you have. Each key is free and needs no card.
+Paste each key on the Settings page (http://localhost:8000/settings), or put it in `.env`. Each
+key is free and needs no card.
 
 | Key | Where to get it | What it turns on |
 | --- | --- | --- |
@@ -59,9 +60,14 @@ shows its price before you spend, every photo records what it cost, and the dail
 runaway. Google's image models need billing on the Google project behind the key, so use a
 project of its own and the free text key stays free.
 
-**Setting the keys.** Copy `.env.example` to `.env` in the same folder as `docker-compose.yml`
-(in PowerShell: `copy .env.example .env`), open it in any text editor, and paste each key after
-its `=` with no quotes. Then recreate the container so it reads the file:
+**Setting the keys.** The quickest way is the Settings page: paste a key on its card (Gemini for
+the agents, Tavily for research, Cloudflare, OpenAI or Google for photos) and press "Test key",
+which checks it for free and saves it when it works. It is used at once, with no restart, and a
+key saved there wins over the same key in `.env`.
+
+Or use `.env`: copy `.env.example` to `.env` in the same folder as `docker-compose.yml` (in
+PowerShell: `copy .env.example .env`), open it in any text editor, and paste each key after its
+`=` with no quotes. Then recreate the container so it reads the file:
 
 ```
 docker compose up -d --force-recreate
@@ -77,7 +83,10 @@ docker compose up -d --force-recreate
 - **"Cannot connect to the Docker daemon"**: Docker Desktop is not running yet. Start it and
   wait for the engine.
 - **The page still says "Demo mode" after you set keys**: the container started before `.env`
-  existed. Run `docker compose up -d --force-recreate`.
+  existed. Run `docker compose up -d --force-recreate`, or paste the Gemini key on the Settings
+  page, which needs no restart.
+- **"Not grounded: No Tavily key is set"**: research found no search key, so the directions come
+  from the brand's occasions, with no web sources. Paste a free Tavily key on the Settings page.
 - **"Cloudflare's free daily allowance is used up"**: the free photo model allows roughly 40 to
   70 photos a day. Wait for the next day (UTC) or choose a paid model on the Settings page.
 - **A clean slate**: `docker compose down -v` removes the database volume; delete the `data`
@@ -177,9 +186,10 @@ their parent. When something goes wrong, this page says where.
 
 ![The Settings page](docs/screenshots/08-settings.png)
 
-Image models and your keys: one card per provider with its key, a free "Test key", the models
-to offer with their prices and presets, the default model, the daily photo and spend limits,
-and a usage table for today and this month. The studio answers only on this computer, and a
+Your keys and image models: a card for the agents' Gemini key and one for Tavily's search key,
+then one card per image provider with its key, a free "Test key", the models to offer with
+their prices and presets, the default model, the daily photo and spend limits, and a usage
+table for today and this month. The studio answers only on this computer, and a
 request from another site is refused.
 
 ## The studio's own look

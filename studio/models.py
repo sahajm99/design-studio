@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator
 from datetime import date
 from typing import Any, get_args
 
+import httpx
 from google.adk.models import Gemini
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_request import LlmRequest
@@ -54,6 +55,15 @@ from studio.contracts import (
     TextAmount,
     now,
 )
+from studio.photos.base import (
+    KEY_CHECK_FAILED,
+    KEY_NOT_SET,
+    KEY_REFUSED,
+    KeyCheck,
+    PhotoUnavailable,
+)
+from studio.photos.google import key_refused
+from studio.photos.transport import send
 
 ROLE_ANALYST = "analyst"
 ROLE_PROMPT_WRITER = "prompt_writer"
@@ -90,6 +100,13 @@ _RETRY_OPTIONS = types.HttpRetryOptions(
     max_delay=30.0,
     http_status_codes=[429, 500, 502, 503, 504],
 )
+
+# v7: the agents' key check on the Settings page, against the model the agents use.
+_GEMINI_LABEL = "Gemini"
+_GEMINI_MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}"
+_KEY_CHECK_TIMEOUT = 30.0
+GEMINI_KEY_WORKS = "The key works. The agents' model, {model}, is available."
+GEMINI_NO_MODEL = "The key works, but the agents' model, {model}, is not available to it."
 
 
 # --------------------------------------------------------------- the context block
@@ -957,12 +974,46 @@ def _editor_summary(edits: list[EditorEdit], blocks: list[dict[str, Any]]) -> st
 def get_llm(settings: Settings) -> BaseLlm:
     """The model to run agents against: the fake in demo mode, else real Gemini.
 
-    The real model's key is read by the SDK from the GOOGLE_API_KEY
-    environment variable; it is never passed in or logged here.
+    v7: the real model is given the key in use, the one saved on the Settings page or else
+    the one in `.env`, through ADK's `client_kwargs`, which ADK keeps out of the model's repr
+    and dumps; it is never logged here. Build it again after the key changes.
     """
     if settings.demo_mode:
         return FakeLlm()
-    return Gemini(model=settings.gemini_model, retry_options=_RETRY_OPTIONS)
+    return Gemini(
+        model=settings.gemini_model,
+        retry_options=_RETRY_OPTIONS,
+        client_kwargs={"api_key": settings.key_in_use("google_api_key")},
+    )
+
+
+async def check_gemini_key(api_key: str, model: str) -> KeyCheck:
+    """The agents' free key check (v7): ask the Gemini API for the model the agents use, with
+    the key in a header. No tokens are spent. The message is plain words, never the key."""
+    if not api_key:
+        return KeyCheck(ok=False, message=KEY_NOT_SET.format(provider=_GEMINI_LABEL))
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await send(
+                lambda: client.get(
+                    _GEMINI_MODEL_URL.format(model=model),
+                    headers={"x-goog-api-key": api_key},
+                    timeout=_KEY_CHECK_TIMEOUT,
+                ),
+                provider=_GEMINI_LABEL,
+                timeout=_KEY_CHECK_TIMEOUT,
+                retry_rate_limit=lambda _: True,
+            )
+    except PhotoUnavailable as error:
+        return KeyCheck(ok=False, message=str(error))
+    if response.is_success:
+        return KeyCheck(ok=True, message=GEMINI_KEY_WORKS.format(model=model))
+    if key_refused(response):
+        return KeyCheck(ok=False, message=KEY_REFUSED.format(provider=_GEMINI_LABEL))
+    if response.status_code == 404:
+        return KeyCheck(ok=False, message=GEMINI_NO_MODEL.format(model=model))
+    message = KEY_CHECK_FAILED.format(provider=_GEMINI_LABEL, status=response.status_code)
+    return KeyCheck(ok=False, message=message)
 
 
 def describe_llm(llm: BaseLlm) -> str:

@@ -1,4 +1,5 @@
-"""Saved provider keys (v6): encrypted at rest, never sent back, redacted from every error.
+"""Saved provider keys (v6; v7 adds the agents' and the search's): encrypted at rest, never sent
+back, redacted from every error.
 
 Keys saved on the Settings page are kept as one Fernet token (authenticated symmetric
 encryption from `cryptography`) in the settings table under `provider_keys`. The secret that
@@ -51,8 +52,13 @@ REDACTED = "[key removed]"
 
 
 class ProviderKeys(BaseModel):
-    """Each provider's key in plain form. Only ever in memory: stored, it is encrypted."""
+    """Each provider's key in plain form. Only ever in memory: stored, it is encrypted. Each
+    field has the name of its field in Settings. Keys saved before v7 read with the agents' and
+    the search's keys empty."""
 
+    # v7: the agents' Gemini key and the web search's Tavily key.
+    google_api_key: str = ""
+    tavily_api_key: str = ""
     cloudflare_account_id: str = ""
     cloudflare_api_token: str = ""
     openai_api_key: str = ""

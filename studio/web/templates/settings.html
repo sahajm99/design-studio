@@ -3,22 +3,9 @@
 {% set page_name = "Settings" %}
 {% block title %}Settings · Design Studio{% endblock %}
 {% block content %}
-<header class="page-header">
-  <h1 class="page-title">Settings<span class="page-title-tail">Image models and your keys</span></h1>
-</header>
-
-{#- The models form has no fields of its own: each card's model fields join it through their
-    form attribute, beside the card's own key form, and "Save models" sends them all. #}
-<form id="models-form" method="post" action="/settings/models" hidden></form>
-
-<section class="panel settings-panel" id="models" aria-labelledby="models-title">
-  <h2 id="models-title">Image models</h2>
-  {% if keys_unreadable %}<p class="field-error settings-alert" role="alert">{{ keys_unreadable }}</p>{% endif %}
-  {% if keys_error %}<p class="field-error settings-alert" role="alert">{{ keys_error }}</p>{% endif %}
-  <div class="provider-list">
-    {% for card in provider_cards %}
-    {% set card_index = loop.index %}
-    <article class="provider-card" id="{{ card.id }}" aria-labelledby="{{ card.id }}-title">
+{#- What every key card shows, the agents' and the search's (v7) as well as an image
+    provider's: its name and status, where its key comes from, the key form and its lines. #}
+{% macro key_card(card) %}
       <div class="provider-head">
         <h3 class="section-title" id="{{ card.id }}-title">{{ card.label }}</h3>
         <span class="badge provider-status is-{{ card.tone }}">{{ card.status }}</span>
@@ -46,6 +33,35 @@
       {% if card.result %}<p class="settings-result" role="status">{{ card.result }}</p>{% endif %}
       {% if card.check %}<p class="provider-check{{ '' if card.check.ok else ' is-failed' }}" role="status">{{ card.check.message }}</p>{% endif %}
       {% if card.note %}<p class="hint provider-note">{{ card.note }}</p>{% endif %}
+{% endmacro %}
+<header class="page-header">
+  <h1 class="page-title">Settings<span class="page-title-tail">Your keys and image models</span></h1>
+</header>
+
+{#- The models form has no fields of its own: each card's model fields join it through their
+    form attribute, beside the card's own key form, and "Save models" sends them all. #}
+<form id="models-form" method="post" action="/settings/models" hidden></form>
+
+<section class="panel settings-panel" id="keys" aria-labelledby="keys-title">
+  <h2 id="keys-title">Agents and research</h2>
+  {% if keys_unreadable %}<p class="field-error settings-alert" role="alert">{{ keys_unreadable }}</p>{% endif %}
+  {% if keys_error %}<p class="field-error settings-alert" role="alert">{{ keys_error }}</p>{% endif %}
+  <div class="provider-list">
+    {% for card in service_cards %}
+    <article class="provider-card" id="{{ card.id }}" aria-labelledby="{{ card.id }}-title">
+{{ key_card(card) }}
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel settings-panel" id="models" aria-labelledby="models-title">
+  <h2 id="models-title">Image models</h2>
+  <div class="provider-list">
+    {% for card in provider_cards %}
+    {% set card_index = loop.index %}
+    <article class="provider-card" id="{{ card.id }}" aria-labelledby="{{ card.id }}-title">
+{{ key_card(card) }}
 
       <ul class="model-list">
         {% for model in card.models %}

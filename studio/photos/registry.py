@@ -5,7 +5,9 @@ Workflows ask the registry, never a provider directly: a round names a model id,
 registry turns it into a working adapter with its key. It is built once, at start-up, from
 the catalogue, the keys in `.env` and the keys saved on the Settings page (a saved key wins
 over the same provider's key in `.env`), and it reads the photo settings from the store each
-time, so a change on the Settings page applies to the next photo.
+time, so a change on the Settings page applies to the next photo. v7: it keeps every saved key,
+the agents' Gemini key and the search's Tavily key too, and hands them to the settings at
+start-up and on each change, so `Settings.key_in_use` answers with them.
 
 Free by default: a session with no model of its own uses the studio's default, FLUX.2 klein
 out of the box, and nothing falls back to a paid model on its own, except to keep a session's
@@ -67,6 +69,9 @@ PHOTO_SETTINGS = "photo_settings"
 _CENT_FRACTION = 1e-9
 
 KeySource = Literal["saved", "env", "none"]
+# v7: whose key a Settings card keeps: an image provider's, or the agents' (Gemini) or the
+# web search's (Tavily). The registry keeps every saved key, not only the image models'.
+KeyOwner = ProviderId | Literal["gemini", "tavily"]
 
 NO_PHOTO_MODEL = "No photo model can be used. Set up a provider's key, or choose another model."
 UNKNOWN_MODEL = "The studio does not know the photo model {model_id}."
@@ -132,6 +137,8 @@ class PhotoRegistry:
         self._store = store
         self._secret = secret
         self._saved_keys, self._keys_unreadable = read_saved_keys(store, secret)
+        # v7: the settings answer with a saved key, so demo mode and research follow it too.
+        settings.use_saved_keys(self._saved_keys.model_dump())
         self._held: dict[str, _Pending] = {}  # by sample id: asked for, not answered yet
         self._unsaved: dict[str, _Pending] = {}  # by sample id: made, not saved yet
         # By sample id: abandoned by a stop or a timeout, so perhaps billed; cost not known.
@@ -200,11 +207,11 @@ class PhotoRegistry:
         """Whether keys were saved that this secret cannot read (the `.env` keys still work)."""
         return self._keys_unreadable
 
-    def has_key(self, provider: ProviderId) -> bool:
+    def has_key(self, provider: KeyOwner) -> bool:
         """Whether the provider has every key it needs, saved or in `.env`."""
         return all(_provider_fields(self.keys(), provider))
 
-    def key_source(self, provider: ProviderId) -> KeySource:
+    def key_source(self, provider: KeyOwner) -> KeySource:
         """Where the provider's key in use comes from: saved here, `.env`, or nowhere."""
         if any(_provider_fields(self._saved_keys, provider)):
             return "saved"
@@ -212,7 +219,7 @@ class PhotoRegistry:
             return "env"
         return "none"
 
-    def key_ending(self, provider: ProviderId) -> str:
+    def key_ending(self, provider: KeyOwner) -> str:
         """The last four characters of the provider's saved key, the only part ever shown."""
         fields = _provider_fields(self._saved_keys, provider)
         return last_four(fields[-1]) if fields else ""
@@ -224,19 +231,23 @@ class PhotoRegistry:
 
     def set_saved_keys(self, keys: ProviderKeys) -> None:
         """Encrypt and save these as the saved keys (all of them, empty ones removed), and use
-        them from the next photo. Raises SecretUnavailable without a secret."""
+        them from the next photo; the settings answer with them at once (v7). Raises
+        SecretUnavailable without a secret."""
         save_provider_keys(self._store, self._secret, keys)
         self._saved_keys, self._keys_unreadable = keys, False
+        self._settings.use_saved_keys(keys.model_dump())
 
     def redact(self, text: str) -> str:
         """The text with every key the studio knows removed, for a log line or a card."""
         return redact(text, [*self._env_keys().values(), *self._saved_keys.values()])
 
     async def test_key(self, provider: ProviderId, typed: ProviderKeys | None = None) -> KeyCheck:
-        """The provider's free key check; in demo mode, no call at all. It checks the key in use,
-        or, when `typed` holds keys typed on the Settings page and not saved, those instead,
-        field by field (a field left empty keeps the key in use). Nothing is saved."""
-        if self.stand_in:
+        """The provider's free key check. It checks the key in use, or, when `typed` holds keys
+        typed on the Settings page and not saved, those instead, field by field (a field left
+        empty keeps the key in use). Nothing is saved. In demo mode the key in use is not
+        checked, with no call at all; a typed key always is (v7), since the page saves it only
+        when the check works, and a saved Cloudflare key now ends the stand-in's photos."""
+        if self.stand_in and typed is None:
             adapter: PhotoProvider = self._stand_in
         else:
             keys = self.keys()
@@ -478,8 +489,11 @@ class PhotoRegistry:
     # ------------------------------------------------------------ helpers
 
     def _env_keys(self) -> ProviderKeys:
+        """The keys in `.env`: the settings' fields, which a saved key never changes."""
         settings = self._settings
         return ProviderKeys(
+            google_api_key=settings.google_api_key,
+            tavily_api_key=settings.tavily_api_key,
             cloudflare_account_id=settings.cloudflare_account_id,
             cloudflare_api_token=settings.cloudflare_api_token,
             openai_api_key=settings.openai_api_key,
@@ -503,7 +517,7 @@ class PhotoRegistry:
         return self._stand_in
 
 
-def _provider_fields(keys: ProviderKeys, provider: ProviderId) -> list[str]:
+def _provider_fields(keys: ProviderKeys, provider: KeyOwner) -> list[str]:
     """The provider's key fields in `keys`: Cloudflare's account id and token, one key for the
     others, none for the stand-in."""
     if provider == "cloudflare":
@@ -512,6 +526,10 @@ def _provider_fields(keys: ProviderKeys, provider: ProviderId) -> list[str]:
         return [keys.openai_api_key]
     if provider == "google":
         return [keys.google_image_api_key]
+    if provider == "gemini":
+        return [keys.google_api_key]
+    if provider == "tavily":
+        return [keys.tavily_api_key]
     return []
 
 

@@ -98,7 +98,7 @@ ASKED_FOR_BRIEF = "Asked for a better brief."
 SKIPPED = "Skipped."
 # Why the research is not grounded: the session page shows "Not grounded: {problem}".
 ALLOWANCE_USED = "The monthly search allowance is used up."
-NO_SEARCH_PROVIDER = "No search provider is configured."
+NO_SEARCH_PROVIDER = "No Tavily key is set; add one in Settings to search the web."
 NO_SOURCES = "The search found no sources."
 SEARCH_FAILED = "The search service failed."
 PLAN_FAILED = "The scout could not plan the searches."

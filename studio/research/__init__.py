@@ -17,10 +17,12 @@ __all__ = [
 
 
 def get_search_provider(settings: Settings) -> SearchProvider | None:
-    """The search provider `settings.research_mode` selects, or None for 'none'."""
+    """The search provider `settings.research_mode` selects, or None for 'none'. v7: Tavily
+    gets the key in use, saved on the Settings page or in `.env`; build it again after the key
+    changes."""
     mode = settings.research_mode
     if mode == "tavily":
-        return TavilySearchProvider(api_key=settings.tavily_api_key)
+        return TavilySearchProvider(api_key=settings.key_in_use("tavily_api_key"))
     if mode == "fake":
         return FakeSearchProvider()
     return None

@@ -78,12 +78,13 @@ from studio.library.sources import (
 )
 from studio.library.taste import build_taste_profile
 from studio.media import agent_copy_path, agent_picture, product_copy_path
+from studio.models import check_gemini_key, get_llm
 from studio.photos.base import (
-    DEMO_NO_IMAGE_CALLS,
     KEY_REFUSED,
     NO_PHOTO_MODEL_FOR_PRODUCTS,
     PROVIDER_LABELS,
     WORDS_ONLY_WITH_PRODUCTS,
+    KeyCheck,
     PhotoUnavailable,
 )
 from studio.photos.catalogue import ImageModel
@@ -103,7 +104,8 @@ from studio.render import (
 )
 from studio.render.custom import upload_file, uploads_only
 from studio.render.faces import Face
-from studio.secrets import KEYS_UNREADABLE, NO_SECRET, ProviderKeys, SecretUnavailable
+from studio.research import TavilySearchProvider, get_search_provider
+from studio.secrets import KEYS_UNREADABLE, NO_SECRET, ProviderKeys, SecretUnavailable, redact
 from studio.store import Store
 from studio.web.jobs import RunJobs
 from studio.web.uploads import (
@@ -152,12 +154,35 @@ _NOT_FOUND = "Not found."
 SPENT = "${spent:.2f}"
 
 # v6: the Settings page. The providers whose keys it keeps, in its order, each with its key
-# fields: the ProviderKeys field and the field's label.
-_KEY_PROVIDERS: dict[str, tuple[tuple[str, str], ...]] = {
+# fields: the ProviderKeys field and the field's label. v7: the agents' and the web search's
+# keys first, on cards of their own, then the image providers', each card with its models.
+_SERVICE_KEYS: dict[str, tuple[tuple[str, str], ...]] = {
+    "gemini": (("google_api_key", "API key"),),
+    "tavily": (("tavily_api_key", "API key"),),
+}
+_PHOTO_KEYS: dict[str, tuple[tuple[str, str], ...]] = {
     "cloudflare": (("cloudflare_account_id", "Account id"), ("cloudflare_api_token", "API token")),
     "openai": (("openai_api_key", "API key"),),
     "google": (("google_image_api_key", "API key"),),
 }
+_KEY_PROVIDERS = {**_SERVICE_KEYS, **_PHOTO_KEYS}
+# v7: the agents' and the search's cards: each one's name, and what its key turns on.
+_SERVICE_LABELS = {"gemini": "Gemini", "tavily": "Tavily"}
+_SERVICE_NOTES = {
+    "gemini": (
+        "The agents' model: they write, judge and research. A free key from Google AI Studio, "
+        "aistudio.google.com/apikey. Without one, the studio runs in demo mode."
+    ),
+    "tavily": (
+        "Web research before the draft. A free key from app.tavily.com: 1,000 searches a "
+        "month, no card. Without one, research has no web sources."
+    ),
+}
+# v7: the Settings page in demo mode, while no model is called at all.
+_SETTINGS_DEMO = "Demo mode: no model is called. Save a Gemini key below for the real agents."
+# v7: the first panel, which shows the alerts about saved keys; a key that could not be saved
+# for want of a secret, on any card, brings the designer back there.
+_KEYS_PANEL = "keys"
 # A provider card's status pill, and the tone it is drawn in (colour only for an outcome).
 _STATUS_FREE = "Free"
 _STATUS_READY = "Ready"
@@ -178,7 +203,8 @@ _USAGE_NOTE = (
 )
 _ABOUT_KEYS = (
     "Saved keys are encrypted on this machine and never shown again. "
-    "Only the last four characters are kept in view. The studio answers only on this computer."
+    "Only the last four characters are kept in view. A key saved here wins over the same key "
+    "in .env, from the next step on. The studio answers only on this computer."
 )
 _SETTINGS_SAVED = "Saved."
 _SETTINGS_REMOVED = "Removed."
@@ -827,7 +853,7 @@ def _usage_rows(deps: Deps) -> list[dict[str, Any]]:
     store = deps.store
     today = midnight_utc()
     month = today.replace(day=1)
-    providers = list(_KEY_PROVIDERS)
+    providers = list(_PHOTO_KEYS)
     if deps.photos.stand_in or store.count_photos_since(month, "fake"):
         providers.append("fake")
     return [
@@ -842,6 +868,42 @@ def _usage_rows(deps: Deps) -> list[dict[str, Any]]:
     ]
 
 
+def _key_label(provider: str) -> str:
+    """A key card's name: "Gemini" and "Tavily" (v7), or the image provider's."""
+    return _SERVICE_LABELS.get(provider) or PROVIDER_LABELS[provider]
+
+
+def _key_card(
+    registry: PhotoRegistry,
+    provider: str,
+    fields: tuple[tuple[str, str], ...],
+    checks: dict[str, dict[str, Any]],
+    *,
+    saved: str,
+    removed: str,
+) -> dict[str, Any]:
+    """What every key card shows: its name and status, where its key comes from, its fields,
+    and the line its last save, removal or check left."""
+    check = checks.get(provider)
+    status, tone = _provider_status(registry, provider, check)
+    result = ""
+    if saved == provider:
+        result = _SETTINGS_SAVED
+    elif removed == provider:
+        result = _SETTINGS_REMOVED
+    return {
+        "id": provider,
+        "label": _key_label(provider),
+        "status": status,
+        "tone": tone,
+        "key_line": _key_line(registry, provider),
+        "has_saved": registry.key_source(provider) == "saved",  # type: ignore[arg-type]
+        "fields": [{"name": name, "label": label} for name, label in fields],
+        "check": check,
+        "result": result,
+    }
+
+
 def _settings_context(
     deps: Deps,
     checks: dict[str, dict[str, Any]],
@@ -850,40 +912,33 @@ def _settings_context(
     removed: str = "",
     error: str = "",
 ) -> dict[str, Any]:
-    """The Settings page: a card per provider, the limits, the usage and the note on keys.
-    `saved`, `removed` and `error` come from the address a form's answer sent the browser to."""
+    """The Settings page: a card for the agents' key and the search's (v7), a card per image
+    provider, the limits, the usage and the note on keys. `saved`, `removed` and `error` come
+    from the address a form's answer sent the browser to."""
     registry = deps.photos
     photo_settings = registry.photo_settings()
     default = registry.default_model()
     default_id = default.id if default is not None else photo_settings.default_model_id
-    cards = []
-    for provider, fields in _KEY_PROVIDERS.items():
-        check = checks.get(provider)
-        status, tone = _provider_status(registry, provider, check)
-        result = ""
-        if saved == provider:
-            result = _SETTINGS_SAVED
-        elif removed == provider:
-            result = _SETTINGS_REMOVED
-        cards.append(
-            {
-                "id": provider,
-                "label": PROVIDER_LABELS[provider],
-                "status": status,
-                "tone": tone,
-                "key_line": _key_line(registry, provider),
-                "has_saved": registry.key_source(provider) == "saved",  # type: ignore[arg-type]
-                "fields": [{"name": name, "label": label} for name, label in fields],
-                "check": check,
-                "result": result,
-                "note": _GOOGLE_BILLING_NOTE if provider == "google" else "",
-                "models": _model_rows(registry, provider, photo_settings, default_id),
-            }
-        )
+    service_cards = [
+        {
+            **_key_card(registry, provider, fields, checks, saved=saved, removed=removed),
+            "note": _SERVICE_NOTES[provider],
+        }
+        for provider, fields in _SERVICE_KEYS.items()
+    ]
+    cards = [
+        {
+            **_key_card(registry, provider, fields, checks, saved=saved, removed=removed),
+            "note": _GOOGLE_BILLING_NOTE if provider == "google" else "",
+            "models": _model_rows(registry, provider, photo_settings, default_id),
+        }
+        for provider, fields in _PHOTO_KEYS.items()
+    ]
     limits = photo_settings.daily_photo_limit
     return {
         # Only while the stand-in makes the photos: Cloudflare's keys make real ones (v5's rule).
-        "demo_banner": DEMO_NO_IMAGE_CALLS if registry.stand_in else "",
+        "demo_banner": _SETTINGS_DEMO if registry.stand_in else "",
+        "service_cards": service_cards,
         "provider_cards": cards,
         "keys_unreadable": KEYS_UNREADABLE if registry.keys_unreadable else "",
         "keys_error": NO_SECRET if error == "no_secret" else "",
@@ -1109,6 +1164,9 @@ def _studio_context(deps: Deps, *, error: str | None = None, brief_value: str = 
         "no_photo_model_for_products": NO_PHOTO_MODEL_FOR_PRODUCTS,
         # v4: "Research first" and the month's searches, unless the kit turns research off.
         "research_enabled": deps.kit.research.enabled,
+        # v7: with no search key, the box says research will have no web sources, and where
+        # the key goes.
+        "research_ready": deps.search_provider is not None,
         "searches_this_month": deps.store.search_credits_this_month(),
         "search_limit": deps.settings.research_monthly_limit,
         "max_samples": deps.settings.max_samples,
@@ -3431,6 +3489,32 @@ def _save_typed_keys(registry: PhotoRegistry, provider: str, typed: ProviderKeys
     registry.set_saved_keys(saved.model_copy(update=update))
 
 
+def _use_keys_in_use(deps: Deps) -> None:
+    """Build the agents' model and the search provider again on the keys in use now (v7), after
+    a key was saved or removed: a Gemini key saved here ends demo mode at once, and research
+    finds a Tavily key without a restart. A run already going keeps the agents it built, while
+    its later steps read the new search provider and name the new model on the run page."""
+    deps.llm = get_llm(deps.settings)
+    deps.search_provider = get_search_provider(deps.settings)
+
+
+async def _check_key(deps: Deps, provider: str, typed: ProviderKeys | None) -> KeyCheck:
+    """The card's free key check, on the key typed when there is one, else on the key in use:
+    the agents' key against the model they use, the search's against Tavily's usage (v7), an
+    image provider's through the registry. The message never holds a key."""
+    if provider not in _SERVICE_KEYS:
+        return await deps.photos.test_key(provider, typed)  # type: ignore[arg-type]
+    field = _SERVICE_KEYS[provider][0][0]
+    key = (getattr(typed, field) if typed is not None else "") or getattr(
+        deps.photos.keys(), field
+    )
+    if provider == "gemini":
+        check = await check_gemini_key(key, deps.settings.gemini_model)
+    else:
+        check = await TavilySearchProvider(api_key=key).test_key()
+    return check.model_copy(update={"message": redact(check.message, [key])})
+
+
 def _settings_address(fragment: str, **query: str) -> RedirectResponse:
     """Back to the Settings page, at the part a form changed, with what its line should say."""
     search = f"?{urlencode(query)}" if query else ""
@@ -3441,7 +3525,8 @@ def _settings_address(fragment: str, **query: str) -> RedirectResponse:
 async def settings_page(
     request: Request, saved: str = "", removed: str = "", error: str = ""
 ) -> Response:
-    """Image models and your keys: the provider cards, the limits, the usage, the note on keys."""
+    """Your keys and image models: the agents' and the search's key cards (v7), the image
+    provider cards, the limits, the usage, the note on keys."""
     deps: Deps = request.app.state.deps
     context = _settings_context(
         deps, _key_checks(request), saved=saved, removed=removed, error=error
@@ -3461,7 +3546,8 @@ async def save_provider_key(request: Request, provider: str) -> Response:
     try:
         _save_typed_keys(deps.photos, provider, typed)
     except SecretUnavailable:
-        return _settings_address(provider, error="no_secret")
+        return _settings_address(_KEYS_PANEL, error="no_secret")
+    _use_keys_in_use(deps)
     _key_checks(request).pop(provider, None)
     return _settings_address(provider, saved=provider)
 
@@ -3478,7 +3564,8 @@ async def remove_provider_key(request: Request, provider: str) -> Response:
         try:
             registry.set_saved_keys(saved.model_copy(update={field: "" for field in fields}))
         except SecretUnavailable:
-            return _settings_address(provider, error="no_secret")
+            return _settings_address(_KEYS_PANEL, error="no_secret")
+        _use_keys_in_use(deps)
     _key_checks(request).pop(provider, None)
     return _settings_address(provider, removed=provider)
 
@@ -3493,14 +3580,15 @@ async def test_provider_key(request: Request, provider: str) -> Response:
     registry = deps.photos
     typed = await _typed_keys(request, provider)
     is_typed = bool(typed.values())
-    check = await registry.test_key(provider, typed if is_typed else None)  # type: ignore[arg-type]
+    check = await _check_key(deps, provider, typed if is_typed else None)
     saved = is_typed and check.ok
     if saved:
         try:
             _save_typed_keys(registry, provider, typed)
         except SecretUnavailable:
-            return _settings_address(provider, error="no_secret")
-    refused = KEY_REFUSED.format(provider=PROVIDER_LABELS[provider])
+            return _settings_address(_KEYS_PANEL, error="no_secret")
+        _use_keys_in_use(deps)
+    refused = KEY_REFUSED.format(provider=_key_label(provider))
     _key_checks(request)[provider] = {
         "ok": check.ok,
         "message": (
